@@ -30,7 +30,7 @@ class FlowContext:
     
     def get_agent_description(self, agent_name : str):
         if agent_name in self.agents_description:
-            return self.agents_description[agent_name]
+            return self.agents_description.get(agent_name, "")
         
 class SessionContext:
     """

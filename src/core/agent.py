@@ -127,6 +127,7 @@ class Agent:
                 call_to = None,
                 data = runtime_state.error_ctx
             )
+        agent_memory_manager.update_summary()
         return Edge(
             callee = self.agent_name,
             call_to = runtime_state.yield_action,

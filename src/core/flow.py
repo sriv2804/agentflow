@@ -24,10 +24,11 @@ class AgentsFlow:
     async def run(
         self,
         session_ctx : SessionContext,
-        flow_ctx : FlowContext
+        flow_ctx : FlowContext,
+        initial_edge : Edge
     ):
         curr_agent = self.start_agent
-        edge = Edge()
+        edge = initial_edge if initial_edge else Edge()
         while True:
             agent_ctx = session_ctx.get_agent(curr_agent.agent_name)
             edge = await curr_agent.execute(
