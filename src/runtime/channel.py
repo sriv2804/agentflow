@@ -30,6 +30,10 @@ class AsyncChannel:
     """
     Thread-safe bidirectional channel for communication between the
     FastAPI server thread (Thread 1) and the agent runtime thread (Thread 2).
+    
+    Transport agnostic — works with SSE, WebSocket, terminal, or A2A.
+    The transport is responsible for bridging its I/O to send_to_agent()
+    and receive_from_agent(). The agent loop never touches transport code.
 
     Queue design:
         client_in_q (maxsize=1000): agent → client. Large buffer allows the
@@ -191,3 +195,4 @@ class AsyncChannel:
         is implemented — no special framework handling required.
         """
         return await self.agent_in_q.get()
+    

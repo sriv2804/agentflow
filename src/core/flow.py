@@ -38,5 +38,6 @@ class AgentsFlow:
                 input_edge = edge
             )
             if edge.call_to is None:
+                #we can also use a terminal edge contract to end the flow
                 return
             curr_agent = curr_agent.successors[edge.call_to]

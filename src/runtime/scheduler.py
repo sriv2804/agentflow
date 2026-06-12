@@ -83,4 +83,7 @@ class AsyncAgentManager:
     
     def get_agent_event_loop(self):
         return self._loop
+    
+    def set_client_event_loop(self, channel: AsyncChannel, client_loop: asyncio.AbstractEventLoop):
+        channel.client_loop = client_loop
            
