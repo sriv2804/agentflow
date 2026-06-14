@@ -1,7 +1,7 @@
 import uuid
 from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
 from dataclasses import dataclass, field
-from src.core.channel import AsyncChannel
+from src.runtime.channel import AsyncChannel
 from src.core.memory import MemoryManager
 from src.tools.common import ToolCall, ToolManager
 from src.core.flow import AgentsFlow
@@ -59,6 +59,8 @@ class SessionContext:
             agent_ctx = AgentContext(agent_id = agent_id)
             self.agents[agent_id] = agent_ctx
         return agent_ctx
-        
+    
+    def set_user_channel(self, channel: AsyncChannel):
+        self.channel = channel
     
     

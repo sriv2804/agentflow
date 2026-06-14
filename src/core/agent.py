@@ -78,8 +78,14 @@ class Agent:
         if callee_agent not in self.connected_agents_ctx:
             self.connected_agents_ctx[callee_agent] = flow_context.get_agent_description(callee_agent)
         agent_memory_manager = agent_context.memory_manager
+        if agent_memory_manager is None:
+            agent_memory_manager = MemoryManager()
+            agent_context.memory_manager = agent_memory_manager
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
         tool_manager = agent_context.tool_manager
+        if tool_manager is None:
+            tool_manager = ToolManager(self.tools)
+            agent_context.tool_manager = tool_manager
         runtime_state = RuntimeState()
         channel = session_context.channel
         while not runtime_state.should_yield and not runtime_state.irrecoverable_error:
