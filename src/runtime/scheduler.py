@@ -4,6 +4,7 @@ from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Tuple
 
 from src.runtime.channel import AsyncChannel
+from src.runtime.run_context import run_on_channel
 
 class AsyncAgentManager:
     """
@@ -39,8 +40,8 @@ class AsyncAgentManager:
         
     async def _create_task(self, run_ctx):
         task = asyncio.create_task(run_on_channel(run_ctx))
-        self.registry[run_ctx.chat_id] = (run_ctx.channel, task)
-        task.add_done_callback(lambda t : self.registry.pop(run_ctx.chat_id, None))
+        self.registry[run_ctx.session_id] = (run_ctx.channel, task)
+        task.add_done_callback(lambda t: self.registry.pop(run_ctx.session_id, None))
     
     def submit(self, run_ctx):
         if not self._loop or not self._loop.is_running():

@@ -1,49 +1,45 @@
 import asyncio
 import json
-from configparser import ConfigParser
-from fastapi import HTTPException, Request, Query
-from fastapi.responses import StreamingResponse, JSONResponse, HTMLResponse
+from fastapi import HTTPException, Request
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
-from src.runtime.scheduler import AsyncAgentManager
-from src.runtime.session_mgr import SessionManger, AgentRunContext
-from src.sse_server.app import app, agent_manager, session_manager
+from src.sse_server.app import app, agent_manager, session_manager, config
+from src.runtime.run_context import AgentRunContext
 
-# Data Model for Input
+
 class UserInput(BaseModel):
-    """
-    Pydantic model representing the user's input payload.
-    """
     text: str
-    
+
 
 @app.post("/chats")
 async def create_chat(request: Request):
     session = session_manager.create_session()
+    session_id = session['session_id']
+    channel = session['channel']
+
+    channel.client_loop = asyncio.get_running_loop()
+
     run_ctx = AgentRunContext(
-        session_id= session['session_id'],
-        channel= session['channel']
-    )
-    agent_manager.set_client_event_loop(
-        channel= session['channel'],
-        client_loop= asyncio.get_event_loop()
+        session_id=session_id,
+        channel=channel,
+        flow_name=config['flow']['name']
     )
     agent_manager.submit(run_ctx)
+
     base_url = str(request.base_url).rstrip("/")
-    
     return {
-        "session_id" : session['session_id'],
-        "input_url" : f"{base_url}/chats/{session['session_id']}/input",
-        "output_stream_url" : f"{base_url}/chats/{session['session_id']}/output/stream"
+        "session_id": session_id,
+        "input_url": f"{base_url}/chats/{session_id}/input",
+        "output_stream_url": f"{base_url}/chats/{session_id}/output/stream"
     }
-    
+
+
 @app.get("/chats/{session_id}/output/stream")
-async def stream_output(session_id : str):
-    session = session_manager.get_session(session_id)
-    if not session:
+async def stream_output(session_id: str):
+    channel = session_manager.get_session(session_id)
+    if not channel:
         raise HTTPException(status_code=404, detail="Chat session not found")
-    channel = session['channel']
-   
-    
+
     async def event_generator():
         try:
             while True:
@@ -58,43 +54,38 @@ async def stream_output(session_id : str):
                     session_manager.delete_session(session_id)
                     return
         except asyncio.CancelledError:
-            print(f"Stream connection closed for {session_id}")                
-        pass
+            print(f"Stream connection closed for {session_id}")
+
     return StreamingResponse(
-        content= event_generator(),
-        media_type= "text/event-stream"
+        content=event_generator(),
+        media_type="text/event-stream"
     )
-    
+
+
 @app.post("/chats/{session_id}/input")
-async def send_input(session_id : str, payload: UserInput):
-    session = session_manager.get_session(session_id)
-    if not session:
-         return JSONResponse(
-             status_code= 404,
-             content= {
-                 "error": "session does not exist"
-             }
-         )
-    channel = session['channel']
+async def send_input(session_id: str, payload: UserInput):
+    channel = session_manager.get_session(session_id)
+    if not channel:
+        return JSONResponse(
+            status_code=404,
+            content={"error": "session does not exist"}
+        )
     success = await channel.send_to_agent(payload.text)
     if success:
-        return JSONResponse(
-            status_code= 200
-        )
+        return JSONResponse(status_code=200)
     return JSONResponse(
-       status_code=400,
-       content= {
+        status_code=400,
+        content={
             "error": (
                 "Not your turn. Please wait for the agent to "
                 "finish processing."
             )
-       }
+        }
     )
+
 
 @app.delete("/chats/{session_id}")
 async def delete_session(session_id: str):
     agent_manager.cancel(session_id)
     session_manager.delete_session(session_id)
     return {"status": "deleted", "session_id": session_id}
-    
-    

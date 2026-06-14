@@ -22,9 +22,10 @@ class AgentContext:
     
 
 class FlowContext:
-    def __init__(self, flow: AgentsFlow):
-        self.flow_description: str  = ""
-        self.agents_description : List[Dict] = []
+    def __init__(self, flow: AgentsFlow, flow_description: str = ""):
+        self.flow = flow
+        self.flow_description: str = flow_description
+        self.agents_description: Dict[str, Any] = {}
         for agent in flow.get_agents_list():
             self.agents_description[agent.agent_name] = agent.get_description
     

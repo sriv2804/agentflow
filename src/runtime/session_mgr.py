@@ -1,15 +1,8 @@
-from typing import Any, Dict, Optional, Tuple
+from typing import Any, Dict, Optional
 from uuid import uuid4
-from dataclasses import dataclass
 from src.runtime.channel import AsyncChannel
 
-@dataclass
-class AgentRunContext:
-    """Request-scoped inputs needed to start an agent task."""
 
-    session_id: str
-    channel: AsyncChannel
-    
 class SessionManager:
     """
     A simply registry for clients' sessions
