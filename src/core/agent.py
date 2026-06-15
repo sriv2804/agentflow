@@ -92,18 +92,17 @@ class Agent:
             if runtime_state.pending_tool_call:
                 tool_call = runtime_state.tool_call
                 #need to put this under an try/except and feedback to agent
-                result =  await tool_manager.execute_tool(tool_call.input)
+                result =  await tool_manager.execute_tool(tool_call)
+                runtime_state.pending_tool_call = False
                 if tool_call.exception:
                     agent_memory_manager.append_msg(
                         role="tool_with_exception",
                         content=tool_call.exception
                     )
-                    runtime_state.pending_tool_call = False
                     #setting this so that the LLM can decide whether this as a 
                     #recoverable error or not
                     continue
                 agent_memory_manager.append_msg(role="tool", content=str(result))
-                runtime_state.pending_tool_call = False
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
                 agent_memory_manager.append_msg(role=self.agent_name, content=query)

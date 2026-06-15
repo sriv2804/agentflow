@@ -2,7 +2,8 @@ from dataclasses import dataclass
 from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
 from collections.abc import Callable
 import functools
-
+import inspect
+import docstring_parser
 
 class Tool:
     """Base class for agent tools. Use the @tool decorator to create one."""
@@ -10,6 +11,7 @@ class Tool:
         self.name = name
         self.description = description
         self._fn = fn
+        self.args_schema = self._build_args_schema()
         self.is_cmd = is_cmd
         functools.update_wrapper(self, fn)
 
@@ -18,7 +20,26 @@ class Tool:
 
     def __repr__(self):
         return f"Tool(name={self.name!r})"
-
+    
+    def _build_args_schema(self):
+        hints = self._fn.__annotations__
+        sig = inspect.signature(self._fn)
+        parsed_doc = docstring_parser.parse(self._fn.__doc__ or "")
+        param_docs = {p.arg_name: p.description for p in parsed_doc.params}
+        lines = []
+        for param_name, param in sig.parameters.items():
+            type_hint = hints.get(param_name,"Any")
+            type_str = type_hint.__name__ if hasattr(type_hint, "__name__") else str(type_hint)
+            description = param_docs.get(param_name, "")
+            if description:
+                lines.append(
+                    f" {param_name} ({type_str}) - {description}"
+                )
+            else:
+                lines.append(
+                    f" {param_name} ({type_str})"
+                )
+        return "\n".join(lines) if lines else "(no arguments)"
 
 def tool(name: str = "", description: str = "", is_cmd = False):
     """Decorator that wraps an async function as a Tool."""
@@ -31,7 +52,7 @@ def tool(name: str = "", description: str = "", is_cmd = False):
 @dataclass
 class ToolCall:
     tool_name: str
-    args: str
+    args: Dict[str, Any]
     output: Any = None
     exception: Optional[Exception] = None
     
@@ -52,15 +73,23 @@ class ToolManager:
         #execute the tool , and add to list and str(right now we are adding to memory)
         #to do -> use is_cmd to decide whether to run in a container or not
         tool_name = tool_call.tool_name
-        tool_args = self._convert_to_dict(tool_call.args)
+        tool_args = tool_call.args
         tool = self.tool_dict[tool_name]
+        res = ""
         try:
-            res=tool(**tool_args)
+            res = await tool(**tool_args)
             tool_call.output=res
-            return res
         except Exception as e:
             tool_call.exception = str(e)
-            return ""
+        finally:
+            self.tool_call_list.append(tool_call)
+            self.tool_call_str += (
+                f"TOOL: {tool_call.tool_name} | "
+                f"ARGS: {tool_call.args} | "
+                f"RESULT: {tool_call.output} | "
+                f"ERROR: {tool_call.exception}\n"
+                )
+            return res
     
     def get_tool_call_history(self) -> str:
         #tool_call_str to be inserted into the prompt of LLM in markdown format
@@ -70,10 +99,11 @@ class ToolManager:
         if self.available_tools:
             return self.available_tools
         available_tools_str = ""
-        for tool in self.tool_list:
-            available_tools_str.append(
+        for tool in self.tool_dict.values():
+            available_tools_str += (
                 f"NAME : {tool.name}\n"
-                f"DESCRIPTION : {tool.description}\n"#also add IO contract
+                f"DESCRIPTION : {tool.description}\n"
+                f"ARGS:\n{tool.args_schema}\n\n"
             )
         self.available_tools = available_tools_str
         return self.available_tools
