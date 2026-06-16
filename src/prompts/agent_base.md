@@ -57,24 +57,24 @@ First reason through what you need to do next. Then output a single JSON object 
 ### Action: tool_call
 Use when you need to invoke a tool to gather information or perform an action.
 ```json
-{"summary": "<your reasoning>", "action": "tool_call", "tool_name": "<exact tool name>", "args": {"<arg_name>": "<arg_value>"}}
+{{"summary": "<your reasoning>", "action": "tool_call", "tool_name": "<exact tool name>", "args": {{"<arg_name>": "<arg_value>"}}}}
 ```
 
 ### Action: clarification
 Use when the user's request is ambiguous and you cannot proceed without more information.
 ```json
-{"summary": "<your reasoning>", "action": "clarification", "query": "<specific question to ask>"}
+{{"summary": "<your reasoning>", "action": "clarification", "query": "<specific question to ask>"}}
 ```
 
 ### Action: yield
 Use when you have a final response or need to hand off to another agent.
 ```json
-{"summary": "<your reasoning>", "action": "yield", "yield_action": "<agent_name or end>", "yield_output": "<your response or handoff data>"}
+{{"summary": "<your reasoning>", "action": "yield", "yield_action": "<agent_name or end>", "yield_output": "<your response or handoff data>"}}
 ```
 
 ### Action: error
 Use when you have encountered an unrecoverable situation you cannot resolve.
 ```json
-{"summary": "<your reasoning>", "action": "error", "error_ctx": "<description of what went wrong and why it cannot be recovered>"}
+{{"summary": "<your reasoning>", "action": "error", "error_ctx": "<description of what went wrong and why it cannot be recovered>"}}
 ```
 </output_format>

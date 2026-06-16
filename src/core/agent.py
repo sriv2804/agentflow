@@ -1,13 +1,17 @@
-from src.core.session import SessionContext, AgentContext
+from __future__ import annotations
+from typing import Any, Dict, Optional, List, TYPE_CHECKING
+from dataclasses import dataclass
+from pathlib import Path
+import json
+
 from src.core.memory import MemoryManager
 from src.tools.common import Tool, ToolCall, ToolManager
-from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
 from src.utils.llm import LLM
 from src.utils.prompt import PromptReader
-from dataclasses import dataclass, field
-from pathlib import Path
-from src.core.flow import FlowContext, Edge
-import json
+from src.core.flow import Edge, FlowContext
+
+if TYPE_CHECKING:
+    from src.core.session import SessionContext, AgentContext
 
 @dataclass
 class RuntimeState:
@@ -95,6 +99,10 @@ class Agent:
             if runtime_state.pending_tool_call:
                 tool_call = runtime_state.tool_call
                 #need to put this under an try/except and feedback to agent
+                await channel.send_to_client({
+                    "message_type": "info",
+                    "content": f"invoking tool : {tool_call.tool_name}"
+                })
                 result =  await tool_manager.execute_tool(tool_call)
                 runtime_state.pending_tool_call = False
                 if tool_call.exception:
@@ -144,7 +152,7 @@ class Agent:
                     parsed_llm_output = self.parse_llm_output(response_from_llm, tool_manager)
                 except Exception as e:
                     #feed the error to the llm and prompt it again
-                    parse_errors.append(e)
+                    parse_errors.append(str(e))
                     if len(parse_errors) > 3:
                         runtime_state.irrecoverable_error = True
                         runtime_state.error_ctx = f"Failed to parse LLM output after 3 attempts. Last error: {parse_errors[-1]}"
@@ -178,6 +186,11 @@ class Agent:
                 data = runtime_state.error_ctx
             )
         agent_memory_manager.update_summary()
+        if runtime_state.yield_action == "end":
+            await channel.send_to_client({
+                "message_type": "done",
+                "content": runtime_state.yield_output
+            })
         return Edge(
             callee = self.agent_name,
             call_to = runtime_state.yield_action,
@@ -218,8 +231,8 @@ class Agent:
             args = parsed.get("args", {})
             if not tool_name:
                 raise ValueError("action is 'tool_call' but 'tool_name' is missing")
-            if tool_name not in self.tool_manager.tool_dict:
-                raise ValueError(f"Unknown tool '{tool_name}'. Available: {list(self.tool_manager.tool_dict.keys())}")
+            if tool_name not in tool_manager.tool_dict:
+                raise ValueError(f"Unknown tool '{tool_name}'. Available: {list(tool_manager.tool_dict.keys())}")
             return {"summary": summary, "runtime_state": {
                 **base,
                 "pending_tool_call": True,
@@ -259,5 +272,8 @@ class Agent:
             }}
         else:
             raise ValueError(f"Unknown action '{action}'. Must be one of: tool_call, clarification, yield, error")
+        
+    def get_description(self) -> str:
+        return ""
 
         

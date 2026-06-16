@@ -1,14 +1,29 @@
-from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
-from dataclasses import dataclass, field
-from src.core.agent import Agent
-from src.core.session import SessionContext, AgentContext, FlowContext
+from __future__ import annotations
+from typing import Any, Dict, Optional, List, TYPE_CHECKING
+from dataclasses import dataclass
 
+if TYPE_CHECKING:
+    from src.core.agent import Agent
+    from src.core.session import SessionContext, AgentContext
+    
 @dataclass
 class Edge:
     callee : str = ""
     call_to : str = ""
     data : Any = None        
-        
+    
+class FlowContext:
+    def __init__(self, flow: AgentsFlow, flow_description: str = ""):
+        self.flow = flow
+        self.flow_description: str = flow_description
+        self.agents_description: Dict[str, Any] = {}
+        for agent in flow.get_agents_list():
+            self.agents_description[agent.agent_name] = agent.get_description
+    
+    def get_agent_description(self, agent_name : str):
+        if agent_name in self.agents_description:
+            return self.agents_description.get(agent_name, "")
+         
 class AgentsFlow:
     def __init__(
         self,
