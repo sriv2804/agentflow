@@ -18,7 +18,10 @@ class LLMError(Exception):
 class OpenAIClient(LLMClient):
     def __init__(self, model_name: str):
         self.model_name = model_name
-        self._client = AsyncOpenAI(api_key=os.environ.get("OPENAI_API_KEY"))
+        self._client = AsyncOpenAI(
+            api_key=os.environ["GITHUB_TOKEN"],
+            base_url="https://models.inference.ai.azure.com"
+        )
 
     async def invoke(self, prompt: str) -> str:
         try:

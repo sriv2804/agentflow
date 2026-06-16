@@ -37,7 +37,7 @@ class AgentsFlow:
                 flow_context = flow_ctx,
                 input_edge = edge
             )
-            if edge.call_to is None:
+            if edge.call_to is None or edge.call_to == "end":
                 #we can also use a terminal edge contract to end the flow
                 return
             curr_agent = curr_agent.successors[edge.call_to]

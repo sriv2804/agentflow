@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from src.runtime.scheduler import AsyncAgentManager
 from src.runtime.session_mgr import SessionManager
+from dotenv import load_dotenv
 
 def load_config(path: str = "config.yaml") -> dict:
     config_path = Path(path)
@@ -12,6 +13,7 @@ def load_config(path: str = "config.yaml") -> dict:
     with open(config_path) as f:
         return yaml.safe_load(f)
 
+load_dotenv() 
 config = load_config()
 agent_manager = AsyncAgentManager()
 session_manager = SessionManager()
