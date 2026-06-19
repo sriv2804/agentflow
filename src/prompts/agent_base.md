@@ -35,6 +35,12 @@ Use exact tool names when calling. Do not invent tool names.
 {tool_call_history}
 </tool_call_history>
 
+<scratchpad>
+## Scratchpad (your reasoning trail for this task)
+This shows your own thoughts and tool calls so far while working on the current request. It resets once you yield or hand off to another agent.
+{scratchpad}
+</scratchpad>
+
 <recent_errors>
 ## Recent Parse Errors
 {recent_errors}

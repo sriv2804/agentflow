@@ -95,6 +95,7 @@ class Agent:
         runtime_state = RuntimeState()
         channel = session_context.channel
         parse_errors = []
+        scratchpad : List[str] = []
         while not runtime_state.should_yield and not runtime_state.irrecoverable_error:
             if runtime_state.pending_tool_call:
                 tool_call = runtime_state.tool_call
@@ -110,10 +111,16 @@ class Agent:
                         role="tool_with_exception",
                         content=tool_call.exception
                     )
+                    scratchpad.append(
+                    f"[FAILED TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> EXCEPTION : {tool_call.exception}"
+                    )
                     #setting this so that the LLM can decide whether this as a 
                     #recoverable error or not
                     continue
                 agent_memory_manager.append_msg(role="tool", content=str(result))
+                scratchpad.append(
+                    f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
+                )
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
                 agent_memory_manager.append_msg(role=self.agent_name, content=query)
@@ -135,6 +142,7 @@ class Agent:
                     )
             else:
                 #need to prompt the LLM and update the state
+                print(f"--- SCRATCHPAD AT THIS STEP ---\n{scratchpad}\n---")
                 prompt_for_llm = self.prompt_template.format(
                     agent_name=self.agent_name,
                     flow_description=flow_context.flow_description,
@@ -143,6 +151,7 @@ class Agent:
                     available_tools=tool_manager.get_available_tools(),
                     summary=agent_memory_manager.summary,
                     conversation_history=agent_memory_manager.get_messages(),
+                    scratchpad='\n'.join(scratchpad) if scratchpad else "empty: this is your first step",
                     tool_call_history=tool_manager.get_tool_call_history(),
                     recent_errors="\n".join(parse_errors) if parse_errors else "None"
                 )
@@ -170,9 +179,11 @@ class Agent:
                 runtime_state = RuntimeState(
                     **parsed_llm_output['runtime_state']
                 )
+                summary = parsed_llm_output.get("summary", "")
+                scratchpad.append(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
                     "message_type": "info",
-                    "content": parsed_llm_output.get("summary", "")
+                    "content": summary
                 })
         if runtime_state.irrecoverable_error:
             await channel.send_to_client({
