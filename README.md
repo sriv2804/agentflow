@@ -70,9 +70,9 @@ Bidirectional queues bridging the FastAPI server thread and the agent runtime th
 | Week | Focus | Status |
 |------|-------|--------|
 | 1 | Core framework — `Agent`, `AgentsFlow`, `SessionContext`, `MemoryManager` | ✅ Complete |
-| 2 | Runtime — `AsyncChannel`, scheduler, FastAPI server | 🔲 In progress |
-| 3 | LLM integration + tool calling | 🔲 Upcoming |
-| 4 | Memory layer — short-term + RAG over ChromaDB | 🔲 Upcoming |
+| 2 | Runtime — `AsyncChannel`, scheduler, FastAPI server | ✅ Complete |
+| 3 | LLM integration + tool calling | ✅ Complete|
+| 4 | Memory layer — short-term + RAG over ChromaDB | 🔲 In Progress |
 | 5–6 | Evals + polish | 🔲 Upcoming |
 
 ---
