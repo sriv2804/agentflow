@@ -95,7 +95,7 @@ class Agent:
         runtime_state = RuntimeState()
         channel = session_context.channel
         parse_errors = []
-        scratchpad : List[str] = []
+        scratchpad : List[str] = agent_context.scratchpad
         while not runtime_state.should_yield and not runtime_state.irrecoverable_error:
             if runtime_state.pending_tool_call:
                 tool_call = runtime_state.tool_call
@@ -196,6 +196,7 @@ class Agent:
                 call_to = None,
                 data = runtime_state.error_ctx
             )
+        agent_context.scratchpad = []
         agent_memory_manager.update_summary()
         if runtime_state.yield_action == "end":
             await channel.send_to_client({
