@@ -4,6 +4,7 @@ from collections.abc import Callable
 import functools
 import inspect
 import docstring_parser
+from src.core.skill_store import SkillStore
 
 class Tool:
     """Base class for agent tools. Use the @tool decorator to create one."""
@@ -28,6 +29,8 @@ class Tool:
         param_docs = {p.arg_name: p.description for p in parsed_doc.params}
         lines = []
         for param_name, param in sig.parameters.items():
+            if param_name == "_ctx":   # ← skip, framework-internal
+               continue
             type_hint = hints.get(param_name,"Any")
             type_str = type_hint.__name__ if hasattr(type_hint, "__name__") else str(type_hint)
             description = param_docs.get(param_name, "")
@@ -55,6 +58,10 @@ class ToolCall:
     args: Dict[str, Any]
     output: Any = None
     exception: Optional[Exception] = None
+
+@dataclass
+class ToolContext:
+    skill_store: Optional[SkillStore] = None
     
 class ToolManager:
     """
@@ -62,13 +69,15 @@ class ToolManager:
     To be inited one per agent
     """
     
-    def __init__(self, tool_list: List[Tool]):
+    def __init__(self, tool_list: List[Tool], tool_context : ToolContext):
         self.tool_dict : Dict[str, Callable] = {}
         for tool in tool_list:
             self.tool_dict[tool.name] = tool
         self.tool_call_list : List[ToolCall] = []
         self.tool_call_str :str = "" 
         self.available_tools : str = ""
+        self.tool_context = ToolContext
+        
     async def execute_tool(self, tool_call: ToolCall):
         #execute the tool , and add to list and str(right now we are adding to memory)
         #to do -> use is_cmd to decide whether to run in a container or not
@@ -77,7 +86,7 @@ class ToolManager:
         tool = self.tool_dict[tool_name]
         res = ""
         try:
-            res = await tool(**tool_args)
+            res = await tool(**tool_args, _ctx = self.tool_context)
             tool_call.output=res
         except Exception as e:
             tool_call.exception = str(e)

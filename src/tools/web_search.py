@@ -2,7 +2,7 @@ from src.tools.common import tool
 from ddgs import DDGS
 
 @tool(name="web_search", description="Search the web for current information on a topic")
-async def web_search(query: str) -> str:
+async def web_search(query: str, _ctx = None) -> str:
     """
     Search the web for current information on a topic.
 

@@ -2,7 +2,7 @@ import math
 from src.tools.common import tool
 
 @tool(name="calculator", description="Evaluate a mathematical expression")
-async def calculator(expression: str) -> str:
+async def calculator(expression: str, _ctx = None) -> str:
     """
     Evaluate a mathematical expression safely.
 

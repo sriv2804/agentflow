@@ -5,10 +5,11 @@ from pathlib import Path
 import json
 
 from src.core.memory import MemoryManager
-from src.tools.common import Tool, ToolCall, ToolManager
+from src.tools.common import Tool, ToolCall, ToolManager, ToolContext
 from src.utils.llm import LLM
 from src.utils.prompt import PromptReader
 from src.core.flow import Edge, FlowContext
+from src.core.skill_store import SkillStore
 
 if TYPE_CHECKING:
     from src.core.session import SessionContext, AgentContext
@@ -60,6 +61,8 @@ class Agent:
         self.connected_agents_ctx = {}
         self.resolver = resolver
         self.successors: Dict[str | "Agent"] = {}
+        self.skill_store = SkillStore(self.agent_name)
+        self.tool_manager = ToolManager(self.tools, ToolContext(self.skill_store))
         
     def next(self, dest_agent: "Agent", action: str = "default") -> "Agent":
         self.successors[action] = dest_agent
@@ -88,10 +91,7 @@ class Agent:
             agent_memory_manager = MemoryManager()
             agent_context.memory_manager = agent_memory_manager
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
-        tool_manager = agent_context.tool_manager
-        if tool_manager is None:
-            tool_manager = ToolManager(self.tools)
-            agent_context.tool_manager = tool_manager
+        tool_manager = self.tool_manager
         runtime_state = RuntimeState()
         channel = session_context.channel
         parse_errors = []
@@ -107,17 +107,12 @@ class Agent:
                 result =  await tool_manager.execute_tool(tool_call)
                 runtime_state.pending_tool_call = False
                 if tool_call.exception:
-                    agent_memory_manager.append_msg(
-                        role="tool_with_exception",
-                        content=tool_call.exception
-                    )
                     scratchpad.append(
                     f"[FAILED TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> EXCEPTION : {tool_call.exception}"
                     )
                     #setting this so that the LLM can decide whether this as a 
                     #recoverable error or not
                     continue
-                agent_memory_manager.append_msg(role="tool", content=str(result))
                 scratchpad.append(
                     f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
                 )
@@ -141,7 +136,6 @@ class Agent:
                         data = query
                     )
             else:
-                #need to prompt the LLM and update the state
                 print(f"--- SCRATCHPAD AT THIS STEP ---\n{scratchpad}\n---")
                 prompt_for_llm = self.prompt_template.format(
                     agent_name=self.agent_name,
@@ -156,7 +150,6 @@ class Agent:
                     recent_errors="\n".join(parse_errors) if parse_errors else "None"
                 )
                 response_from_llm = await self.llm.invoke(prompt_for_llm)
-                #need to put this under an try/except and feedback to agent in case of wrong format
                 try:
                     parsed_llm_output = self.parse_llm_output(response_from_llm, tool_manager)
                 except Exception as e:
@@ -166,14 +159,13 @@ class Agent:
                         runtime_state.irrecoverable_error = True
                         runtime_state.error_ctx = f"Failed to parse LLM output after 3 attempts. Last error: {parse_errors[-1]}"
                     else:
-                        agent_memory_manager.append_msg(
-                            role="system",
-                            content=(
-                                f"Your previous response could not be parsed. Error: {parse_errors[-1]}\n"
-                                f"Your response was: {response_from_llm}\n"
-                                f"Please respond with a valid JSON object as specified in the output format."
-                            )
+                        #even the error should be added to the scratchpad only
+                        error_msg =(
+                            f"Your previous response could not be parsed. Error: {parse_errors[-1]}\n"
+                            f"Your response was: {response_from_llm}\n"
+                            f"Please respond with a valid JSON object as specified in the output format."
                         )
+                        scratchpad.append(error_msg)         
                     continue
                 #we also need to properly format the LLM o/p and display the relevant parts to user
                 runtime_state = RuntimeState(
