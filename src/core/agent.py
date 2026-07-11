@@ -5,7 +5,7 @@ from pathlib import Path
 import json
 
 from src.core.memory import MemoryManager
-from src.tools.common import Tool, ToolCall, ToolManager, ToolContext
+from src.tools.common import Tool, ToolCall, ToolManager, ToolContext, ToolGroup
 from src.utils.llm import LLM
 from src.utils.prompt import PromptReader
 from src.core.flow import Edge, FlowContext
@@ -46,13 +46,15 @@ class Agent:
         self,
         agent_name: str,
         model_name: str,
-        tools : List[Tool],
+        tool_grps : List[ToolGroup],
+        always_on_tools : List[Tool],
         execution_prompt_path : Path,
         resolver : str
     ):
         self.agent_name = agent_name
         self.llm = LLM(model_name = model_name)
-        self.tools = tools
+        self.tool_grps = tool_grps
+        self.always_on_tools = always_on_tools
         self.prompt_template = PromptReader.read_prompt()
         self.execution_prompt = PromptReader.read_execution_prompt(execution_prompt_path)
         #connected_agents_ctx will be used by this agent to refer to the
@@ -62,7 +64,7 @@ class Agent:
         self.resolver = resolver
         self.successors: Dict[str | "Agent"] = {}
         self.skill_store = SkillStore(self.agent_name)
-        self.tool_manager = ToolManager(self.tools, ToolContext(self.skill_store))
+        self.tool_manager = ToolManager(tool_grps, always_on_tools)
 
         
         
@@ -94,6 +96,11 @@ class Agent:
             agent_context.memory_manager = agent_memory_manager
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
         tool_manager = self.tool_manager
+        tool_manager.set_toolctx(
+            self.skill_store,
+            agent_memory_manager.scratchpad,
+            self.tool_manager
+        )
         runtime_state = RuntimeState()
         channel = session_context.channel
         parse_errors = []
@@ -147,7 +154,9 @@ class Agent:
                     flow_description=flow_context.flow_description,
                     connected_agents_context=str(self.connected_agents_ctx),
                     execution_prompt=self.execution_prompt,
-                    available_tools=tool_manager.get_available_tools(),
+                    always_on_tools=tool_manager.get_always_on_tools(),
+                    tool_group_summary=tool_manager.get_group_summary(),
+                    max_loaded_groups=scratchpad.max_tool_grps,
                     summary=agent_memory_manager.summary,
                     conversation_history=agent_memory_manager.get_messages(),
                     scratchpad=scratchpad.get_scratchpad_str(),

@@ -4,11 +4,15 @@ from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
 class ScratchPad:
     def __init__(
         self,
-        max_len = 20
+        max_len = 20,
+        max_tool_grps = 3
     ):
         self.max_len: int = max_len
-        self.active_skill: Optional[str] = ""
+        self.max_tool_grps = max_tool_grps
         self.trail : List[str] = []
+        self.active_skill: Optional[str] = ""
+        self.loaded_tool_grp_str : Optional[str] = ""
+        self.loaded_tool_grp_list : List[Dict] = []
         self.trail_str: str = ""
         self.msg_str: str  = ""
         
@@ -41,14 +45,44 @@ class ScratchPad:
         msg_str = ""
         if self.active_skill:
             msg_str += f"[ACTIVE SKILL]\n{self.active_skill}\n"
+        if self.loaded_tool_grp_str:
+            msg_str += f"[LOADED TOOL GROUP]\n\n{self.loaded_tool_grp_str}"
         if self.trail_str:
             msg_str += f"[REASONING TRAIL]\n{self.trail_str}"
         return msg_str
     
     def get_scratchpad_str(self):
         return self.msg_str if self.msg_str else "(empty — this is your first step)"
-            
     
+    def evict_and_add_tool_grp(self, tool_grp_name: str, tool_grp_desc):
+        self.loaded_tool_grp_list.pop(0)
+        self.loaded_tool_grp_list.append(
+            {
+                "name": tool_grp_name,
+                "description": tool_grp_desc
+            }
+        )
+        
+    def load_group(self, tool_grp_name: str, tool_grp_desc: str):
+        if len(self.loaded_tool_grp_list) >= self.max_tool_grps:
+            self.evict_and_add_tool_grp(
+                tool_grp_name,
+                tool_grp_desc
+            )
+            self.loaded_tool_grp_str = ""
+            for tool_grp_dict in self.loaded_tool_grp_list:
+                self.loaded_tool_grp_str += (
+                        f"[{tool_grp_dict['name']}]:\n"
+                        f"{tool_grp_dict["description"]}"
+                )
+        else:
+            self.loaded_tool_grp_str += (
+                f"[{tool_grp_name}]:\n"
+                f"{tool_grp_desc}"
+            )
+        self.msg_str = self._render()
+            
+        
 class MemoryManager:
     def __init__(
         self,

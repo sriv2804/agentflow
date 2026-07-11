@@ -5,6 +5,7 @@ import functools
 import inspect
 import docstring_parser
 from src.core.skill_store import SkillStore
+from src.core.memory import ScratchPad
 
 class Tool:
     """Base class for agent tools. Use the @tool decorator to create one."""
@@ -62,6 +63,32 @@ class ToolCall:
 @dataclass
 class ToolContext:
     skill_store: Optional[SkillStore] = None
+    scratchpad: Optional[ScratchPad] = None
+    tool_manager: Optional[ToolManager] = None
+    
+@dataclass
+class ToolGroup:
+    name : str 
+    description : str
+    tools : List[Tool]
+    instructions : str
+    schema : str = None
+    
+    def render_group_schema(self):
+        if self.schema:
+            return self.schema
+        self.schema = f"AVAILABLE TOOLS:\n\n"
+        available_tools_str = ""
+        for tool in self.tools:
+            available_tools_str += (
+                f"NAME : {tool.name}\n"
+                f"DESCRIPTION : {tool.description}\n"
+                f"ARGS:\n{tool.args_schema}\n\n"
+            )
+        self.schema += available_tools_str
+        self.schema += f"INSTRUCTIONS FOR THIS TOOL GROUP\nTO BE STRICTLY FOLLOWED\n"
+        self.schema += self.instructions
+        return self.schema
     
 class ToolManager:
     """
@@ -69,18 +96,50 @@ class ToolManager:
     To be inited one per agent
     """
     
-    def __init__(self, tool_list: List[Tool], tool_context : ToolContext):
+    def __init__(
+        self,
+        tool_grp_list: List[ToolGroup],
+        always_on_tools: List[Tool],
+        tool_context : ToolContext = None
+    ):
         self.tool_dict : Dict[str, Callable] = {}
-        for tool in tool_list:
+        self.tool_grp_list = tool_grp_list
+        self.tool_grp_dict = {}
+        self.always_on_tools = always_on_tools
+        for tool_grp in tool_grp_list:
+            self.tool_grp_dict[tool_grp.name] = tool_grp
+            for tool in tool_grp.tools:
+                self.tool_dict[tool.name] = tool
+        for tool in always_on_tools:
             self.tool_dict[tool.name] = tool
         self.tool_call_list : List[ToolCall] = []
         self.tool_call_str :str = "" 
         self.available_tools : str = ""
+        self.grp_summary : str = ""
+        self.always_on_tools_desc : str = ""
+        self.grp_names : str = ""
         self.tool_context = tool_context
-        
+    
+    def set_toolctx(
+        self,
+        skill_store : SkillStore,
+        scratchpad : ScratchPad,
+        tool_manager : ToolManager,
+    ):
+        if self.tool_context:
+            return
+        self.tool_context.skill_store = skill_store
+        self.tool_context.scratchpad = scratchpad
+        self.tool_context.tool_manager = tool_manager
+    
+    def get_tool_group(self, tool_grp_name : str):
+        return self.tool_grp_dict.get(tool_grp_name, None)
+    
     async def execute_tool(self, tool_call: ToolCall):
         #execute the tool , and add to list and str(right now we are adding to memory)
         #to do -> use is_cmd to decide whether to run in a container or not
+        if self.tool_context.tool_manager is None:
+            self.tool_context.tool_manager = self
         tool_name = tool_call.tool_name
         tool_args = tool_call.args
         tool = self.tool_dict[tool_name]
@@ -116,4 +175,35 @@ class ToolManager:
             )
         self.available_tools = available_tools_str
         return self.available_tools
+    
+    def group_names(self):
+        if self.grp_names:
+            return self.grp_names
+        self.grp_names = f"{[gp.name for gp in self.tool_grp_list]}"
+        return self.grp_names
+    
+    def get_group_summary(self):
+        if self.grp_summary:
+            return self.grp_summary
+        grp_summary = "FOLLOWING TOOL GROUPS ARE AVAILABLE\n\n"
+        for tool_grp in self.tool_grp_list:
+            grp_summary += f"[{tool_grp.name}] -> {tool_grp.description}\n"
+            tool_name_list = f"{[t.name for t in tool_grp.tools]}"
+            grp_summary += f"\t{tool_name_list}\n\n"
+        self.grp_summary = grp_summary
+        return self.grp_summary
+    
+    def get_always_on_tools(self):
+        if self.always_on_tools_desc:
+            return self.always_on_tools_desc
+        always_on_tools_desc = "FOLLOWING TOOLS ARE ALWAYS AVAILABLE\n\n"
+        for tool in self.always_on_tools:
+            always_on_tools_desc += (
+                f"NAME : {tool.name}\n"
+                f"DESCRIPTION : {tool.description}\n"
+                f"ARGS:\n{tool.args_schema}\n\n"
+            )
+        self.always_on_tools_desc = always_on_tools_desc
+        return self.always_on_tools_desc
+        
         
