@@ -57,6 +57,7 @@ class MemoryManager:
         self.summary : str = ""
         self.conversation_history : List[Dict] = []
         self.max_short_term = max_short_term
+        self.scratchpad = ScratchPad(max_short_term) 
     
     def append_msg(self, role: str, content: str):
         self.conversation_history.append({

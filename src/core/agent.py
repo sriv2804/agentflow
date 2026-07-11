@@ -63,6 +63,8 @@ class Agent:
         self.successors: Dict[str | "Agent"] = {}
         self.skill_store = SkillStore(self.agent_name)
         self.tool_manager = ToolManager(self.tools, ToolContext(self.skill_store))
+
+        
         
     def next(self, dest_agent: "Agent", action: str = "default") -> "Agent":
         self.successors[action] = dest_agent
@@ -95,7 +97,7 @@ class Agent:
         runtime_state = RuntimeState()
         channel = session_context.channel
         parse_errors = []
-        scratchpad : List[str] = agent_context.scratchpad
+        scratchpad = agent_memory_manager.scratchpad
         while not runtime_state.should_yield and not runtime_state.irrecoverable_error:
             if runtime_state.pending_tool_call:
                 tool_call = runtime_state.tool_call
@@ -107,15 +109,18 @@ class Agent:
                 result =  await tool_manager.execute_tool(tool_call)
                 runtime_state.pending_tool_call = False
                 if tool_call.exception:
-                    scratchpad.append(
+                    scratchpad.append_trail(
                     f"[FAILED TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> EXCEPTION : {tool_call.exception}"
                     )
                     #setting this so that the LLM can decide whether this as a 
                     #recoverable error or not
                     continue
-                scratchpad.append(
-                    f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
-                )
+                if tool_call.tool_name == "skill_retriever":
+                    scratchpad.set_skill(result)
+                else: 
+                    scratchpad.append_trail(
+                        f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
+                    )
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
                 agent_memory_manager.append_msg(role=self.agent_name, content=query)
@@ -136,7 +141,7 @@ class Agent:
                         data = query
                     )
             else:
-                print(f"--- SCRATCHPAD AT THIS STEP ---\n{scratchpad}\n---")
+                # print(f"--- SCRATCHPAD AT THIS STEP ---\n{scratchpad.get_scratchpad_str()}\n---")
                 prompt_for_llm = self.prompt_template.format(
                     agent_name=self.agent_name,
                     flow_description=flow_context.flow_description,
@@ -145,7 +150,7 @@ class Agent:
                     available_tools=tool_manager.get_available_tools(),
                     summary=agent_memory_manager.summary,
                     conversation_history=agent_memory_manager.get_messages(),
-                    scratchpad='\n'.join(scratchpad) if scratchpad else "empty: this is your first step",
+                    scratchpad=scratchpad.get_scratchpad_str(),
                     tool_call_history=tool_manager.get_tool_call_history(),
                     recent_errors="\n".join(parse_errors) if parse_errors else "None"
                 )
@@ -165,14 +170,14 @@ class Agent:
                             f"Your response was: {response_from_llm}\n"
                             f"Please respond with a valid JSON object as specified in the output format."
                         )
-                        scratchpad.append(error_msg)         
+                        scratchpad.append_trail(error_msg)         
                     continue
                 #we also need to properly format the LLM o/p and display the relevant parts to user
                 runtime_state = RuntimeState(
                     **parsed_llm_output['runtime_state']
                 )
                 summary = parsed_llm_output.get("summary", "")
-                scratchpad.append(f"[THOUGHT] {summary}")
+                scratchpad.append_trail(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
                     "message_type": "info",
                     "content": summary

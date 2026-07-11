@@ -3,7 +3,7 @@ from pathlib import Path
 import asyncio
 from src.tools.common import tool, ToolContext
 
-SKILL_TEMPLATE_PATH = Path(__file__).parent / "prompts" / "skill_template.md"
+SKILL_TEMPLATE_PATH = Path(__file__).parent.parent / "prompts" / "skill_template.md"
 
 def _load_template():
     global SKILL_TEMPLATE

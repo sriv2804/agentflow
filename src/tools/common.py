@@ -76,7 +76,7 @@ class ToolManager:
         self.tool_call_list : List[ToolCall] = []
         self.tool_call_str :str = "" 
         self.available_tools : str = ""
-        self.tool_context = ToolContext
+        self.tool_context = tool_context
         
     async def execute_tool(self, tool_call: ToolCall):
         #execute the tool , and add to list and str(right now we are adding to memory)

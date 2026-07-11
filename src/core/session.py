@@ -12,7 +12,6 @@ class AgentContext:
     agent_id : str
     data : Dict[str, Any] = field(default_factory=dict)
     memory_manager : Optional[MemoryManager] = None
-    scratchpad: List[str] = field(default_factory=list)
     tool_manager : Optional[ToolManager] = None
     
     def set_memory_manager(self, memory_manager: MemoryManager) -> None:
