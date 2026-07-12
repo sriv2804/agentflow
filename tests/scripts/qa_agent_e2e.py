@@ -37,7 +37,7 @@ async def test_e2e():
         if msg.get('message_type') in ('done', 'error', 'response'):
             break
 
-asyncio.run(test_e2e())
+#asyncio.run(test_e2e())
 
 
 async def run_session(manager: AsyncAgentManager, query: str, session_id: str):

@@ -1,6 +1,7 @@
 from typing import Tuple
 from pathlib import Path
 from src.core.agent import Agent
+from src.flows.registry import register_flow
 from src.tools.load_tool_group import load_tool_group
 from src.tools.web_search import web_search
 from src.tools.calculator import calculator
@@ -68,3 +69,4 @@ Before saving:
     )
     flow_ctx = FlowContext(flow=flow, flow_description="A simple Q&A agent")
     return flow, flow_ctx
+register_flow("qa_agent", build_qa_flow)

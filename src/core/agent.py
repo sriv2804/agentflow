@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import re
 
 from src.core.memory import MemoryManager
 from src.tools.common import Tool, ToolCall, ToolManager, ToolContext, ToolGroup
@@ -163,6 +164,16 @@ class Agent:
                     tool_call_history=tool_manager.get_tool_call_history(),
                     recent_errors="\n".join(parse_errors) if parse_errors else "None"
                 )
+                # ---- LOGGING LLM PROMPT -----
+                log_dir = Path("logs")
+                log_dir.mkdir(exist_ok=True)
+                call_count = getattr(self, '_prompt_log_count', 0) + 1
+                self._prompt_log_count = call_count
+                log_file = log_dir / f"{self.agent_name}_prompt_{call_count}.txt"
+                with open(log_file, "w") as f:
+                    f.write(prompt_for_llm)
+                # ---- END LOGGING ----
+                
                 response_from_llm = await self.llm.invoke(prompt_for_llm)
                 try:
                     parsed_llm_output = self.parse_llm_output(response_from_llm, tool_manager)
@@ -220,8 +231,14 @@ class Agent:
         Parses the LLM's JSON response into a RuntimeState-compatible dict.
         Raises ValueError on invalid format — caller wraps in try/except.
         """
+        # strip markdown code fences if present — gpt-4o and other models sometimes wrap JSON
+        cleaned = llm_response.strip()
+        match = re.search(r'```(?:json)?\s*([\s\S]*?)\s*```', cleaned)
+        if match:
+            cleaned = match.group(1).strip()
+
         try:
-            parsed = json.loads(llm_response.strip())
+            parsed = json.loads(cleaned)
         except json.JSONDecodeError as e:
             raise ValueError(f"LLM response is not valid JSON: {e}\nResponse was: {llm_response}")
         

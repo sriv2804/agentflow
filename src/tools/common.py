@@ -64,7 +64,7 @@ class ToolCall:
 class ToolContext:
     skill_store: Optional[SkillStore] = None
     scratchpad: Optional[ScratchPad] = None
-    tool_manager: Optional[ToolManager] = None
+    tool_manager: Optional["ToolManager"] = None
     
 @dataclass
 class ToolGroup:
@@ -124,10 +124,11 @@ class ToolManager:
         self,
         skill_store : SkillStore,
         scratchpad : ScratchPad,
-        tool_manager : ToolManager,
+        tool_manager : "ToolManager",
     ):
         if self.tool_context:
             return
+        self.tool_context = ToolContext()
         self.tool_context.skill_store = skill_store
         self.tool_context.scratchpad = scratchpad
         self.tool_context.tool_manager = tool_manager
@@ -185,7 +186,7 @@ class ToolManager:
     def get_group_summary(self):
         if self.grp_summary:
             return self.grp_summary
-        grp_summary = "FOLLOWING TOOL GROUPS ARE AVAILABLE\n\n"
+        grp_summary = ""
         for tool_grp in self.tool_grp_list:
             grp_summary += f"[{tool_grp.name}] -> {tool_grp.description}\n"
             tool_name_list = f"{[t.name for t in tool_grp.tools]}"
@@ -196,7 +197,7 @@ class ToolManager:
     def get_always_on_tools(self):
         if self.always_on_tools_desc:
             return self.always_on_tools_desc
-        always_on_tools_desc = "FOLLOWING TOOLS ARE ALWAYS AVAILABLE\n\n"
+        always_on_tools_desc = ""
         for tool in self.always_on_tools:
             always_on_tools_desc += (
                 f"NAME : {tool.name}\n"
