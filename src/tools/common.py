@@ -65,6 +65,10 @@ class ToolContext:
     skill_store: Optional[SkillStore] = None
     scratchpad: Optional[ScratchPad] = None
     tool_manager: Optional["ToolManager"] = None
+    recall_store: Optional[Any] = None
+    fact_store: Optional[Any] = None
+    session_id: Optional[str] = None
+    memory_manager: Optional[Any] = None
     
 @dataclass
 class ToolGroup:
@@ -125,6 +129,10 @@ class ToolManager:
         skill_store : SkillStore,
         scratchpad : ScratchPad,
         tool_manager : "ToolManager",
+        recall_store : Optional[Any] = None,
+        fact_store : Optional[Any] = None,
+        session_id : Optional[str] = None,
+        memory_manager : Optional[Any] = None,
     ):
         if self.tool_context:
             return
@@ -132,6 +140,10 @@ class ToolManager:
         self.tool_context.skill_store = skill_store
         self.tool_context.scratchpad = scratchpad
         self.tool_context.tool_manager = tool_manager
+        self.tool_context.recall_store = recall_store
+        self.tool_context.fact_store = fact_store
+        self.tool_context.session_id = session_id
+        self.tool_context.memory_manager = memory_manager
     
     def get_tool_group(self, tool_grp_name : str):
         return self.tool_grp_dict.get(tool_grp_name, None)

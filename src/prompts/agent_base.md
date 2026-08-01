@@ -15,6 +15,13 @@ You are {agent_name}, an AI agent operating within a multi-agent system.
 {execution_prompt}
 </agent_role>
 
+<working_memory>
+## Working Memory
+This is your persistent index of long-term memory. It summarizes key facts and context that persist across sessions. Update it via `working_memory_update` when you learn something important.
+
+{working_memory}
+</working_memory>
+
 <always_on_tools>
 ## Always Available Tools
 These tools are always available — you do not need to load them.

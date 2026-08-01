@@ -1,0 +1,1 @@
+India's population is approximately 1.428 billion, and Australia's population is about 27.995 million, giving a ratio of roughly 51:1.

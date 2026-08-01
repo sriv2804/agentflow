@@ -11,6 +11,8 @@ from src.utils.llm import LLM
 from src.utils.prompt import PromptReader
 from src.core.flow import Edge, FlowContext
 from src.core.skill_store import SkillStore
+from src.core.recall_store import RecallStore
+from src.core.fact_store import FactStore
 
 if TYPE_CHECKING:
     from src.core.session import SessionContext, AgentContext
@@ -50,10 +52,11 @@ class Agent:
         tool_grps : List[ToolGroup],
         always_on_tools : List[Tool],
         execution_prompt_path : Path,
-        resolver : str
+        resolver : str,
+        model_backend : str = "openai"
     ):
         self.agent_name = agent_name
-        self.llm = LLM(model_name = model_name)
+        self.llm = LLM(model_name = model_name, backend = model_backend)
         self.tool_grps = tool_grps
         self.always_on_tools = always_on_tools
         self.prompt_template = PromptReader.read_prompt()
@@ -65,6 +68,8 @@ class Agent:
         self.resolver = resolver
         self.successors: Dict[str | "Agent"] = {}
         self.skill_store = SkillStore(self.agent_name)
+        self.recall_store = RecallStore(self.agent_name)
+        self.fact_store = FactStore(self.agent_name)
         self.tool_manager = ToolManager(tool_grps, always_on_tools)
 
         
@@ -96,11 +101,23 @@ class Agent:
             agent_memory_manager = MemoryManager()
             agent_context.memory_manager = agent_memory_manager
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
+        turn_counter = 0
+        await self.recall_store.append(
+            session_id=session_context.session_id,
+            turn_id=turn_counter,
+            role="user",
+            content=input_data
+        )
+        turn_counter += 1
         tool_manager = self.tool_manager
         tool_manager.set_toolctx(
             self.skill_store,
             agent_memory_manager.scratchpad,
-            self.tool_manager
+            self.tool_manager,
+            recall_store=self.recall_store,
+            fact_store=self.fact_store,
+            session_id=session_context.session_id,
+            memory_manager=agent_memory_manager
         )
         runtime_state = RuntimeState()
         channel = session_context.channel
@@ -141,6 +158,22 @@ class Agent:
                         )
                         response_from_client = await channel.receive_from_client()
                         agent_memory_manager.append_msg(role='user', content=response_from_client)
+                        await self.recall_store.append(
+                            session_id=session_context.session_id,
+                            turn_id=turn_counter,
+                            role="user",
+                            content=response_from_client
+                        )
+                        turn_counter += 1
+                        if agent_memory_manager.should_trigger_memory_pressure():
+                            agent_memory_manager.mark_pressure_triggered()
+                            scratchpad.append_trail(
+                                "[SYSTEM] Memory pressure: conversation history is nearing capacity. "
+                                "Before continuing, use long_term_memory tools to: "
+                                "1) save important facts via fact_write "
+                                "2) update your working_memory via working_memory_update "
+                                "Eviction will happen after your next yield."
+                            )
                         runtime_state.needs_clarification = False
                 else:
                     return Edge(
@@ -162,7 +195,8 @@ class Agent:
                     conversation_history=agent_memory_manager.get_messages(),
                     scratchpad=scratchpad.get_scratchpad_str(),
                     tool_call_history=tool_manager.get_tool_call_history(),
-                    recent_errors="\n".join(parse_errors) if parse_errors else "None"
+                    recent_errors="\n".join(parse_errors) if parse_errors else "None",
+                    working_memory=agent_memory_manager.working_memory or "(empty)"
                 )
                 # ---- LOGGING LLM PROMPT -----
                 log_dir = Path("logs")
@@ -197,6 +231,13 @@ class Agent:
                     **parsed_llm_output['runtime_state']
                 )
                 summary = parsed_llm_output.get("summary", "")
+                await self.recall_store.append(
+                    session_id=session_context.session_id,
+                    turn_id=turn_counter,
+                    role="agent",
+                    content=response_from_llm
+                )
+                turn_counter += 1
                 scratchpad.append_trail(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
                     "message_type": "info",
