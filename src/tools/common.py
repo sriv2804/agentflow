@@ -67,8 +67,11 @@ class ToolContext:
     tool_manager: Optional["ToolManager"] = None
     recall_store: Optional[Any] = None
     fact_store: Optional[Any] = None
-    session_id: Optional[str] = None
+    session_id: Optional[str] = None          # runtime session ID
     memory_manager: Optional[Any] = None
+    agent_name: Optional[str] = None
+    working_dir: Optional[str] = None
+    storage_session_id: Optional[str] = None  # storage namespace from config
     
 @dataclass
 class ToolGroup:
@@ -133,6 +136,9 @@ class ToolManager:
         fact_store : Optional[Any] = None,
         session_id : Optional[str] = None,
         memory_manager : Optional[Any] = None,
+        agent_name : Optional[str] = None,
+        working_dir : Optional[str] = None,
+        storage_session_id : Optional[str] = None,
     ):
         if self.tool_context:
             return
@@ -144,6 +150,9 @@ class ToolManager:
         self.tool_context.fact_store = fact_store
         self.tool_context.session_id = session_id
         self.tool_context.memory_manager = memory_manager
+        self.tool_context.agent_name = agent_name
+        self.tool_context.working_dir = working_dir
+        self.tool_context.storage_session_id = storage_session_id
     
     def get_tool_group(self, tool_grp_name : str):
         return self.tool_grp_dict.get(tool_grp_name, None)

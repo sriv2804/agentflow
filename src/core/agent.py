@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from pathlib import Path
 import json
 import re
+import yaml
 
 from src.core.memory import MemoryManager
 from src.tools.common import Tool, ToolCall, ToolManager, ToolContext, ToolGroup
@@ -13,6 +14,7 @@ from src.core.flow import Edge, FlowContext
 from src.core.skill_store import SkillStore
 from src.core.recall_store import RecallStore
 from src.core.fact_store import FactStore
+from src.core.storage import get_working_memory_path
 
 if TYPE_CHECKING:
     from src.core.session import SessionContext, AgentContext
@@ -67,13 +69,41 @@ class Agent:
         self.connected_agents_ctx = {}
         self.resolver = resolver
         self.successors: Dict[str | "Agent"] = {}
-        self.skill_store = SkillStore(self.agent_name)
-        self.recall_store = RecallStore(self.agent_name)
-        self.fact_store = FactStore(self.agent_name)
+
+        with open("config.yaml") as f:
+            config = yaml.safe_load(f)
+        storage_cfg = config.get("storage", {})
+        self.working_dir = storage_cfg.get("working_dir", ".agentflow")
+        self.session_id = storage_cfg.get("session_id", "default")
+
+        self.skill_store = SkillStore(self.agent_name, self.working_dir, self.session_id)
+        self.recall_store = RecallStore(self.agent_name, self.working_dir, self.session_id)
+        self.fact_store = FactStore(self.agent_name, self.working_dir, self.session_id)
         self.tool_manager = ToolManager(tool_grps, always_on_tools)
+
+        wm_path = get_working_memory_path(self.working_dir, self.session_id, self.agent_name)
+        if wm_path.exists():
+            with open(wm_path, "r") as f:
+                self._persisted_working_memory = json.load(f).get("working_memory", "")
+        else:
+            self._persisted_working_memory = ""
 
         
         
+    def _handle_memory_pressure(self, agent_memory_manager: MemoryManager, scratchpad) -> None:
+        if agent_memory_manager.should_trigger_memory_pressure():
+            agent_memory_manager.mark_pressure_triggered()
+            scratchpad.append_trail(
+                "[SYSTEM] Memory pressure: conversation history is nearing capacity. "
+                "Before continuing, use long_term_memory tools to: "
+                "1) save important facts via fact_write "
+                "2) update your working_memory via working_memory_update. "
+                "Eviction will happen automatically after this window."
+            )
+        if agent_memory_manager.should_evict():
+            agent_memory_manager.evict_oldest()
+            agent_memory_manager.reset_memory_pressure()
+
     def next(self, dest_agent: "Agent", action: str = "default") -> "Agent":
         self.successors[action] = dest_agent
         return dest_agent
@@ -98,9 +128,11 @@ class Agent:
             self.connected_agents_ctx[callee_agent] = flow_context.get_agent_description(callee_agent)
         agent_memory_manager = agent_context.memory_manager
         if agent_memory_manager is None:
-            agent_memory_manager = MemoryManager()
+            agent_memory_manager = MemoryManager(working_memory=self._persisted_working_memory)
             agent_context.memory_manager = agent_memory_manager
+        scratchpad = agent_memory_manager.scratchpad
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
+        self._handle_memory_pressure(agent_memory_manager, scratchpad)
         turn_counter = 0
         await self.recall_store.append(
             session_id=session_context.session_id,
@@ -117,12 +149,14 @@ class Agent:
             recall_store=self.recall_store,
             fact_store=self.fact_store,
             session_id=session_context.session_id,
-            memory_manager=agent_memory_manager
+            memory_manager=agent_memory_manager,
+            agent_name=self.agent_name,
+            working_dir=self.working_dir,
+            storage_session_id=self.session_id
         )
         runtime_state = RuntimeState()
         channel = session_context.channel
         parse_errors = []
-        scratchpad = agent_memory_manager.scratchpad
         while not runtime_state.should_yield and not runtime_state.irrecoverable_error:
             if runtime_state.pending_tool_call:
                 tool_call = runtime_state.tool_call
@@ -165,15 +199,7 @@ class Agent:
                             content=response_from_client
                         )
                         turn_counter += 1
-                        if agent_memory_manager.should_trigger_memory_pressure():
-                            agent_memory_manager.mark_pressure_triggered()
-                            scratchpad.append_trail(
-                                "[SYSTEM] Memory pressure: conversation history is nearing capacity. "
-                                "Before continuing, use long_term_memory tools to: "
-                                "1) save important facts via fact_write "
-                                "2) update your working_memory via working_memory_update "
-                                "Eviction will happen after your next yield."
-                            )
+                        self._handle_memory_pressure(agent_memory_manager, scratchpad)
                         runtime_state.needs_clarification = False
                 else:
                     return Edge(

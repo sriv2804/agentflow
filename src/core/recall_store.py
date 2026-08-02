@@ -7,15 +7,17 @@ from typing import List, Dict
 from datetime import datetime, timezone
 import asyncio
 import chromadb
-
-_chroma_client = chromadb.PersistentClient(path=".chromadb")
+from src.core.storage import get_chromadb_path
 
 
 class RecallStore:
-    def __init__(self, agent_name: str):
+    def __init__(self, agent_name: str, working_dir: str = ".agentflow", session_id: str = "default"):
         self.agent_name: str = agent_name
-        self.collection = _chroma_client.get_or_create_collection(
-            name=f"recall_{agent_name}"
+        chromadb_path = get_chromadb_path(working_dir, session_id)
+        self.client = chromadb.PersistentClient(path=str(chromadb_path))
+        self.collection = self.client.get_or_create_collection(
+            name=f"recall_{agent_name}",
+            metadata={"hnsw:space": "cosine"}
         )
 
     async def append(self, session_id: str, turn_id: int, role: str, content: str):

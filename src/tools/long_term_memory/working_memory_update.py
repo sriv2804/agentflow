@@ -1,4 +1,6 @@
+import json
 from src.tools.common import tool, ToolContext
+from src.core.storage import get_working_memory_path
 
 @tool(name="working_memory_update", description="Update your working memory index")
 async def working_memory_update(updated_memory: str, _ctx: ToolContext = None) -> str:
@@ -11,4 +13,13 @@ async def working_memory_update(updated_memory: str, _ctx: ToolContext = None) -
         updated_memory: the new working memory content (replaces current content entirely)
     """
     _ctx.memory_manager.working_memory = updated_memory
-    return "Working memory updated successfully."
+
+    wm_path = get_working_memory_path(
+        _ctx.working_dir,
+        _ctx.storage_session_id,
+        _ctx.agent_name
+    )
+    with open(wm_path, "w") as f:
+        json.dump({"working_memory": updated_memory}, f, indent=2)
+
+    return "Working memory updated and persisted successfully."

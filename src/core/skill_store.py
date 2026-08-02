@@ -1,28 +1,24 @@
 from typing import Any, List, Optional, Dict
 from pathlib import Path
 import chromadb
-import yaml
+from src.core.storage import get_chromadb_path
 
-def _load_config(path : str = "config.yaml") ->dict:
-    config_path = Path(path)
-    if not config_path.exists():
-        raise FileNotFoundError(f"Config file not found {path}")
-    with open(config_path) as f:
-        return yaml.safe_load(f)
-
-_chroma_client = chromadb.PersistentClient(path=".chromadb")
 class SkillStore:
     def __init__(
         self,
-        agent_name
+        agent_name,
+        working_dir: str = ".agentflow",
+        session_id: str = "default"
     ):
         self.agent_name : str = agent_name
-        config = _load_config()
-        self.agent_skills_path : Path = Path(config['base_skill_path'])/f"{self.agent_name}_skills"
-        Path(self.agent_skills_path).mkdir(parents = True, exist_ok = True)
-        self.collection = _chroma_client.get_or_create_collection(
-            name=f"{agent_name}_skills"
+        chromadb_path = get_chromadb_path(working_dir, session_id)
+        self.client = chromadb.PersistentClient(path=str(chromadb_path))
+        self.collection = self.client.get_or_create_collection(
+            name=f"skills_{agent_name}",
+            metadata={"hnsw:space": "cosine"}
         )
+        self.agent_skills_path : Path = Path(working_dir)/session_id/f"skills_{agent_name}"
+        self.agent_skills_path.mkdir(parents = True, exist_ok = True)
         existing = self.collection.get()
         self.skill_list = existing["ids"] if existing["ids"] else []
     

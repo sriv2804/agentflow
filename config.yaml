@@ -6,3 +6,7 @@ server:
   port: 8000
 
 base_skill_path: "skills"
+
+storage:
+  working_dir: ".agentflow"
+  session_id: "default"

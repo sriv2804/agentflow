@@ -4,6 +4,6 @@ BACKLOG.md
 __pycache__/
 *.pyc
 *.pyo
-.chromadb/
 .vscode/
 logs/
+.agentflow/

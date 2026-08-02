@@ -86,13 +86,14 @@ class ScratchPad:
 class MemoryManager:
     def __init__(
         self,
-        max_short_term: int = 20
+        max_short_term: int = 20,
+        working_memory: str = ""
     ):
         self.summary : str = ""
         self.conversation_history : List[Dict] = []
         self.max_short_term = max_short_term
         self.scratchpad = ScratchPad(max_short_term)
-        self.working_memory: str = ""   # persistent index of long-term stores
+        self.working_memory: str = working_memory   # persistent index of long-term stores
         self._memory_pressure_triggered: bool = False
 
     def should_trigger_memory_pressure(self) -> bool:
@@ -103,9 +104,18 @@ class MemoryManager:
     def mark_pressure_triggered(self):
         self._memory_pressure_triggered = True
 
-    def reset_pressure_flag(self):
-        """Reset after eviction so it can trigger again next window"""
+    def reset_memory_pressure(self):
+        """Called after eviction — allows pressure to trigger again next window."""
         self._memory_pressure_triggered = False
+
+    def should_evict(self) -> bool:
+        """Returns True when conversation history hits 100% of max_short_term"""
+        return len(self.conversation_history) >= self.max_short_term
+
+    def evict_oldest(self):
+        """Evict oldest 30% of messages to free space."""
+        evict_count = max(1, int(self.max_short_term * 0.3))
+        self.conversation_history = self.conversation_history[evict_count:]
 
     def append_msg(self, role: str, content: str):
         self.conversation_history.append({
@@ -114,7 +124,7 @@ class MemoryManager:
         })
         if len(self.conversation_history) > self.max_short_term:
             self.conversation_history.pop(0)
-            self.reset_pressure_flag()
+            self.reset_memory_pressure()
             
     def get_messages(self, as_string = True):
         base = [{"role": "system", "content": self.summary}] if self.summary else []
