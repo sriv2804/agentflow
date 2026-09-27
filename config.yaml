@@ -1,5 +1,5 @@
 flow:
-  name: "qa_agent"
+  name: "competitive_analysis"
 
 server:
   host: "0.0.0.0"

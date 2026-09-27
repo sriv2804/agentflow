@@ -137,7 +137,7 @@ class Agent:
         await self.recall_store.append(
             session_id=session_context.session_id,
             turn_id=turn_counter,
-            role="user",
+            role=callee_agent,
             content=input_data
         )
         turn_counter += 1
@@ -182,7 +182,7 @@ class Agent:
                     )
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
-                agent_memory_manager.append_msg(role=self.agent_name, content=query)
+                agent_memory_manager.append_msg(role=self.agent_name, content=f"[to {self.resolver}] {query}")
                 if self.resolver == "user":
                         await channel.send_to_client(
                             {
@@ -280,7 +280,16 @@ class Agent:
                 call_to = None,
                 data = runtime_state.error_ctx
             )
-        agent_context.scratchpad = []
+        #record our own handoff so the conversation history holds both sides
+        yield_target = (
+            "user" if runtime_state.yield_action == "end"
+            else self.successors[runtime_state.yield_action].agent_name
+        )
+        agent_memory_manager.append_msg(
+            role=self.agent_name,
+            content=f"[to {yield_target}] {runtime_state.yield_output}"
+        )
+        scratchpad.reset_trail()
         agent_memory_manager.update_summary()
         if runtime_state.yield_action == "end":
             await channel.send_to_client({
