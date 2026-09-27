@@ -1,0 +1,19 @@
+# Server
+fastapi>=0.124.4
+uvicorn>=0.38.0
+pydantic>=2.11.7
+
+# LLM backends
+openai>=2.41.1
+ollama>=0.6.2
+
+# Memory / retrieval
+chromadb>=1.5.9
+
+# Tools
+ddgs>=9.14.4
+docstring_parser>=0.18.0
+
+# Config
+python-dotenv>=0.21.0
+PyYAML>=6.0.3
