@@ -72,7 +72,7 @@ async def send_input(session_id: str, payload: UserInput):
         )
     success = await channel.send_to_agent(payload.text)
     if success:
-        return JSONResponse(status_code=200)
+        return JSONResponse(status_code=200, content={"status": "ok"})
     return JSONResponse(
         status_code=400,
         content={

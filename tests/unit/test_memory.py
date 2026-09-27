@@ -1,5 +1,5 @@
 import pytest
-from src.core.memory import MemoryManager
+from src.core.memory import MemoryManager, ScratchPad
 
 
 def test_append_msg_adds_message():
@@ -57,3 +57,26 @@ def test_no_system_message_when_summary_empty():
     mm.append_msg("user", "hi")
     result = mm.get_messages(as_string=False)
     assert result[0]["role"] == "user"
+
+
+def test_reset_trail_clears_reasoning_but_keeps_groups_and_skill():
+    sp = ScratchPad()
+    sp.load_group("web_tools", "WEB TOOLS SCHEMA\n")
+    sp.set_skill("SKILL BODY")
+    sp.append_trail("[THOUGHT] researched tool A")
+    sp.reset_trail()
+    rendered = sp.get_scratchpad_str()
+    assert sp.trail == []
+    assert "researched tool A" not in rendered
+    assert "WEB TOOLS SCHEMA" in rendered
+    assert "SKILL BODY" in rendered
+
+
+def test_trail_renders_again_after_reset():
+    sp = ScratchPad()
+    sp.append_trail("[THOUGHT] first pass")
+    sp.reset_trail()
+    sp.append_trail("[THOUGHT] second pass")
+    rendered = sp.get_scratchpad_str()
+    assert "first pass" not in rendered
+    assert "[REASONING TRAIL]" in rendered and "second pass" in rendered

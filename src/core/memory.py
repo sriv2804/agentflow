@@ -37,6 +37,13 @@ class ScratchPad:
             else:
                 self.msg_str += f"----{trail_msg}----\n"
             
+    def reset_trail(self):
+        #clears the reasoning trail in place (tool ctx holds a ref to this object);
+        #loaded tool groups and the active skill are kept across handoffs
+        self.trail = []
+        self.trail_str = ""
+        self.msg_str = self._render()
+
     def set_skill(self, skill:str):
         self.active_skill = skill
         self.msg_str = self._render()
