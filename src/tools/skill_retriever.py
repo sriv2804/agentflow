@@ -9,15 +9,19 @@ async def skill_retriever(mode :str, query_str: str = "",_ctx: ToolContext = Non
 
     Args:
         mode: "view" to list available skills, "get" to retrieve a specific skill by task description
-        query: task description for semantic search (required when mode is "get")
+        query_str: task description for semantic search (required when mode is "get")
     """
-    # Week 4 — wire ChromaDB here
     skill_store = _ctx.skill_store
     if mode == 'view':
-        return "\n".join(skill_store.list_all_skills())
+        skills = skill_store.list_all_skills()
+        return "\n".join(skills) if skills else "No skills saved yet."
     elif mode == 'get':
         if not query_str:
             raise Exception("query_str is mandatory when using mode get")
-        result = await asyncio.to_thread(skill_store.query, query_str)
-        return result
+        skill = await asyncio.to_thread(skill_store.query, query_str)
+        if not skill:
+            return "No matching skill found."
+        #the skill itself is shown under [ACTIVE SKILL]; only confirm here
+        _ctx.scratchpad.set_skill(skill)
+        return "Loaded the best-matching skill. Follow it under [ACTIVE SKILL] in your scratchpad."
     raise Exception("invalid mode passed, valid modes are view and get")

@@ -5,6 +5,7 @@ End-to-end run of the competitive_analysis flow over the real SSE API.
     python -m tests.scripts.competitive_analysis_e2e --answer "features and pricing, 20-person eng team"
     python -m tests.scripts.competitive_analysis_e2e --query "Figma vs Canva for a marketing team"
     python -m tests.scripts.competitive_analysis_e2e --base-url http://localhost:8000
+    python -m tests.scripts.competitive_analysis_e2e --query "..." --resume <session_id>
 
 Without --base-url, the FastAPI app is started in-process (flow name overridden
 to competitive_analysis). HITL clarifications are answered from --answer values
@@ -52,10 +53,18 @@ def iter_sse(url: str):
                 yield json.loads(line[len("data: "):])
 
 
-def find_report(started_at: float) -> Path | None:
+def wait_for_session_exit(session_id: str, timeout: float = 10):
+    """In-process server: let the session task finish (it saves history on exit)."""
+    from src.sse_server.app import agent_manager
+    deadline = time.time() + timeout
+    while session_id in agent_manager.registry and time.time() < deadline:
+        time.sleep(0.1)
+
+
+def find_report(session_id: str, started_at: float) -> Path | None:
     with open("config.yaml") as f:
         storage = yaml.safe_load(f).get("storage", {})
-    reports_dir = Path(storage.get("working_dir", ".agentflow")) / storage.get("session_id", "default") / "reports"
+    reports_dir = Path(storage.get("working_dir", ".agentflow")) / session_id / "reports"
     reports = [p for p in reports_dir.glob("*.md") if p.stat().st_mtime >= started_at]
     return max(reports, key=lambda p: p.stat().st_mtime) if reports else None
 
@@ -64,6 +73,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--base-url", help="use an already-running server instead of starting one")
     parser.add_argument("--query", default=QUERY, help="initial user query")
+    parser.add_argument("--resume", help="session_id of a previous run to resume")
     parser.add_argument("--answer", action="append", default=[], help="scripted HITL answer (repeatable)")
     args = parser.parse_args()
 
@@ -71,7 +81,7 @@ def main():
     scripted_answers = list(args.answer)
     started_at = time.time()
 
-    chat = post_json(f"{base_url}/chats")
+    chat = post_json(f"{base_url}/chats", {"session_id": args.resume} if args.resume else None)
     print(f"session: {chat['session_id']}")
     print(f"\n[user] {args.query}\n")
     post_json(chat["input_url"], {"text": args.query})
@@ -97,10 +107,13 @@ def main():
         else:
             print(f"[{msg_type}] {content}")
 
-    report = find_report(started_at)
+    if not args.base_url:
+        wait_for_session_exit(chat["session_id"])
+    report = find_report(chat["session_id"], started_at)
     print("\n" + "=" * 60)
     print(f"HITL clarifications asked: {clarifications}")
     print(f"Report file: {report.resolve() if report else 'NOT FOUND'}")
+    print(f"Session id: {chat['session_id']}  (resume with --resume {chat['session_id']})")
     if final is None:
         print("Stream ended without a 'done' message.")
 

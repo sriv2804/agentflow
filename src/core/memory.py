@@ -1,4 +1,7 @@
 from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
+from pathlib import Path
+import json
+import os
 
 
 class ScratchPad:
@@ -94,10 +97,13 @@ class MemoryManager:
     def __init__(
         self,
         max_short_term: int = 20,
-        working_memory: str = ""
+        working_memory: str = "",
+        history_path: Optional[Path] = None
     ):
         self.summary : str = ""
         self.conversation_history : List[Dict] = []
+        #where conversation_history is saved when the session ends (see run_on_channel)
+        self.history_path: Optional[Path] = history_path
         self.max_short_term = max_short_term
         self.scratchpad = ScratchPad(max_short_term)
         self.working_memory: str = working_memory   # persistent index of long-term stores
@@ -132,6 +138,21 @@ class MemoryManager:
         if len(self.conversation_history) > self.max_short_term:
             self.conversation_history.pop(0)
             self.reset_memory_pressure()
+
+    def save_history(self, path: Path):
+        #blocking file I/O — async callers should run it via asyncio.to_thread
+        path = Path(path)
+        tmp_path = path.with_suffix(".tmp")
+        with open(tmp_path, "w") as f:
+            json.dump(self.conversation_history, f)
+        os.replace(tmp_path, path)
+
+    def load_history(self, path: Path):
+        path = Path(path)
+        if not path.exists():
+            return
+        with open(path) as f:
+            self.conversation_history = json.load(f)
             
     def get_messages(self, as_string = True):
         base = [{"role": "system", "content": self.summary}] if self.summary else []

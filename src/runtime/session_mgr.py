@@ -11,11 +11,12 @@ class SessionManager:
     def __init__(self):
         self.registry: Dict[str, Dict] = {}
         
-    def create_session(self) -> Dict[str, AsyncChannel]:
+    def create_session(self, session_id: Optional[str] = None) -> Dict[str, AsyncChannel]:
         """
         creates a channel referenced by the provided session_id
+        a new session_id is generated unless one is passed (to resume a session)
         """
-        session_id = str(uuid4())
+        session_id = session_id or str(uuid4())
         channel = AsyncChannel()
         self.registry[session_id] = channel
         session = {

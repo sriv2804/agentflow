@@ -1,3 +1,4 @@
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from src.runtime.channel import AsyncChannel
@@ -35,4 +36,16 @@ async def run_on_channel(run_ctx: AgentRunContext) -> None:
         data=first_input
     )
 
-    await flow.run(session_ctx, flow_ctx, initial_edge=initial_edge)
+    try:
+        await flow.run(session_ctx, flow_ctx, initial_edge=initial_edge)
+    finally:
+        # graceful end (flow finished, errored or was cancelled): persist each
+        # agent's conversation history so the session can be resumed later
+        await save_session_history(session_ctx)
+
+
+async def save_session_history(session_ctx: SessionContext) -> None:
+    for agent_ctx in session_ctx.agents.values():
+        memory_manager = agent_ctx.memory_manager
+        if memory_manager and memory_manager.history_path:
+            await asyncio.to_thread(memory_manager.save_history, memory_manager.history_path)

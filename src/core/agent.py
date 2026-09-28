@@ -14,7 +14,7 @@ from src.core.flow import Edge, FlowContext
 from src.core.skill_store import SkillStore
 from src.core.recall_store import RecallStore
 from src.core.fact_store import FactStore
-from src.core.storage import get_working_memory_path
+from src.core.storage import get_working_memory_path, get_conversation_history_path
 
 if TYPE_CHECKING:
     from src.core.session import SessionContext, AgentContext
@@ -74,19 +74,32 @@ class Agent:
             config = yaml.safe_load(f)
         storage_cfg = config.get("storage", {})
         self.working_dir = storage_cfg.get("working_dir", ".agentflow")
-        self.session_id = storage_cfg.get("session_id", "default")
-
-        self.skill_store = SkillStore(self.agent_name, self.working_dir, self.session_id)
-        self.recall_store = RecallStore(self.agent_name, self.working_dir, self.session_id)
-        self.fact_store = FactStore(self.agent_name, self.working_dir, self.session_id)
         self.tool_manager = ToolManager(tool_grps, always_on_tools)
 
-        wm_path = get_working_memory_path(self.working_dir, self.session_id, self.agent_name)
+        #storage is scoped to the runtime session id, which is only known once
+        #execute() runs (flow builders don't receive it) -> bound in _bind_storage()
+        self.session_id: Optional[str] = None
+        self.skill_store: Optional[SkillStore] = None
+        self.recall_store: Optional[RecallStore] = None
+        self.fact_store: Optional[FactStore] = None
+        self._persisted_working_memory = ""
+
+    def _bind_storage(self, session_id: str) -> None:
+        if self.session_id == session_id:
+            return
+        if self.session_id is not None:
+            raise RuntimeError(
+                f"Agent '{self.agent_name}' is already bound to session '{self.session_id}'"
+            )
+        self.session_id = session_id
+        self.skill_store = SkillStore(self.agent_name, self.working_dir, session_id)
+        self.recall_store = RecallStore(self.agent_name, self.working_dir, session_id)
+        self.fact_store = FactStore(self.agent_name, self.working_dir, session_id)
+
+        wm_path = get_working_memory_path(self.working_dir, session_id, self.agent_name)
         if wm_path.exists():
             with open(wm_path, "r") as f:
                 self._persisted_working_memory = json.load(f).get("working_memory", "")
-        else:
-            self._persisted_working_memory = ""
 
         
         
@@ -126,9 +139,18 @@ class Agent:
         callee_agent, call_to, input_data = input_edge.callee, input_edge.call_to, input_edge.data
         if callee_agent not in self.connected_agents_ctx:
             self.connected_agents_ctx[callee_agent] = flow_context.get_agent_description(callee_agent)
+        self._bind_storage(session_context.session_id)
         agent_memory_manager = agent_context.memory_manager
         if agent_memory_manager is None:
-            agent_memory_manager = MemoryManager(working_memory=self._persisted_working_memory)
+            history_path = get_conversation_history_path(
+                self.working_dir, self.session_id, self.agent_name
+            )
+            agent_memory_manager = MemoryManager(
+                working_memory=self._persisted_working_memory,
+                history_path=history_path
+            )
+            #resumed sessions pick up where they left off
+            agent_memory_manager.load_history(history_path)
             agent_context.memory_manager = agent_memory_manager
         scratchpad = agent_memory_manager.scratchpad
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
@@ -163,6 +185,7 @@ class Agent:
                 #need to put this under an try/except and feedback to agent
                 await channel.send_to_client({
                     "message_type": "info",
+                    "agent": self.agent_name,
                     "content": f"invoking tool : {tool_call.tool_name}"
                 })
                 result =  await tool_manager.execute_tool(tool_call)
@@ -174,12 +197,9 @@ class Agent:
                     #setting this so that the LLM can decide whether this as a 
                     #recoverable error or not
                     continue
-                if tool_call.tool_name == "skill_retriever":
-                    scratchpad.set_skill(result)
-                else: 
-                    scratchpad.append_trail(
-                        f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
-                    )
+                scratchpad.append_trail(
+                    f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
+                )
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
                 agent_memory_manager.append_msg(role=self.agent_name, content=f"[to {self.resolver}] {query}")
@@ -187,6 +207,7 @@ class Agent:
                         await channel.send_to_client(
                             {
                                 "message_type": 'response',
+                                "agent": self.agent_name,
                                 'content': query
                             }
                         )
@@ -267,11 +288,13 @@ class Agent:
                 scratchpad.append_trail(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
                     "message_type": "info",
+                    "agent": self.agent_name,
                     "content": summary
                 })
         if runtime_state.irrecoverable_error:
             await channel.send_to_client({
                 "message_type":  "done",
+                "agent": self.agent_name,
                 "content": f"Hit an internal error : {runtime_state.error_ctx}"
                 }
             )
@@ -294,6 +317,7 @@ class Agent:
         if runtime_state.yield_action == "end":
             await channel.send_to_client({
                 "message_type": "done",
+                "agent": self.agent_name,
                 "content": runtime_state.yield_output
             })
         return Edge(
