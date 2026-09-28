@@ -175,12 +175,9 @@ class Agent:
                     #setting this so that the LLM can decide whether this as a 
                     #recoverable error or not
                     continue
-                if tool_call.tool_name == "skill_retriever":
-                    scratchpad.set_skill(result)
-                else: 
-                    scratchpad.append_trail(
-                        f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
-                    )
+                scratchpad.append_trail(
+                    f"[TOOL CALL] {tool_call.tool_name}({tool_call.args}) -> {result}"
+                )
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
                 agent_memory_manager.append_msg(role=self.agent_name, content=f"[to {self.resolver}] {query}")
