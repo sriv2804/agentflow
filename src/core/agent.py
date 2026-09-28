@@ -163,6 +163,7 @@ class Agent:
                 #need to put this under an try/except and feedback to agent
                 await channel.send_to_client({
                     "message_type": "info",
+                    "agent": self.agent_name,
                     "content": f"invoking tool : {tool_call.tool_name}"
                 })
                 result =  await tool_manager.execute_tool(tool_call)
@@ -187,6 +188,7 @@ class Agent:
                         await channel.send_to_client(
                             {
                                 "message_type": 'response',
+                                "agent": self.agent_name,
                                 'content': query
                             }
                         )
@@ -267,11 +269,13 @@ class Agent:
                 scratchpad.append_trail(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
                     "message_type": "info",
+                    "agent": self.agent_name,
                     "content": summary
                 })
         if runtime_state.irrecoverable_error:
             await channel.send_to_client({
                 "message_type":  "done",
+                "agent": self.agent_name,
                 "content": f"Hit an internal error : {runtime_state.error_ctx}"
                 }
             )
@@ -294,6 +298,7 @@ class Agent:
         if runtime_state.yield_action == "end":
             await channel.send_to_client({
                 "message_type": "done",
+                "agent": self.agent_name,
                 "content": runtime_state.yield_output
             })
         return Edge(
