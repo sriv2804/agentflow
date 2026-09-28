@@ -17,3 +17,6 @@ docstring_parser>=0.18.0
 # Config
 python-dotenv>=0.21.0
 PyYAML>=6.0.3
+
+# TUI
+colorama>=0.4.6
