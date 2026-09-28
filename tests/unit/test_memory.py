@@ -1,3 +1,4 @@
+import json
 import pytest
 from src.core.memory import MemoryManager, ScratchPad
 
@@ -80,3 +81,33 @@ def test_trail_renders_again_after_reset():
     rendered = sp.get_scratchpad_str()
     assert "first pass" not in rendered
     assert "[REASONING TRAIL]" in rendered and "second pass" in rendered
+
+
+def test_save_history_writes_current_history(tmp_path):
+    path = tmp_path / "history.json"
+    mm = MemoryManager()
+    mm.append_msg("user", "hello")
+    mm.append_msg("orchestrator", "hi")
+    mm.save_history(path)
+    assert json.loads(path.read_text()) == mm.conversation_history
+
+
+def test_append_does_not_write_to_disk(tmp_path):
+    path = tmp_path / "history.json"
+    MemoryManager(history_path=path).append_msg("user", "hello")
+    assert not path.exists()
+
+
+def test_load_history_restores_and_is_noop_when_missing(tmp_path):
+    path = tmp_path / "history.json"
+    saved = MemoryManager()
+    saved.append_msg("user", "remember me")
+    saved.save_history(path)
+
+    restored = MemoryManager()
+    restored.load_history(path)
+    assert restored.conversation_history == [{"role": "user", "content": "remember me"}]
+
+    empty = MemoryManager()
+    empty.load_history(tmp_path / "missing.json")
+    assert empty.conversation_history == []

@@ -9,4 +9,3 @@ base_skill_path: "skills"
 
 storage:
   working_dir: ".agentflow"
-  session_id: "default"

@@ -1,5 +1,8 @@
 import asyncio
 import json
+import uuid
+from pathlib import Path
+from typing import Optional
 from fastapi import HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
@@ -11,9 +14,29 @@ class UserInput(BaseModel):
     text: str
 
 
+class CreateChat(BaseModel):
+    session_id: Optional[str] = None   # pass a previous session_id to resume it
+
+
+def _resumable_session_id(session_id: str) -> str:
+    try:
+        session_id = str(uuid.UUID(session_id))  # also keeps path segments out
+    except ValueError:
+        raise HTTPException(status_code=400, detail="session_id must be a UUID")
+    if session_manager.get_session(session_id):
+        raise HTTPException(status_code=409, detail="Session is already active")
+    working_dir = config.get("storage", {}).get("working_dir", ".agentflow")
+    if not (Path(working_dir) / session_id).is_dir():
+        raise HTTPException(status_code=404, detail="No stored session with this id")
+    return session_id
+
+
 @app.post("/chats")
-async def create_chat(request: Request):
-    session = session_manager.create_session()
+async def create_chat(request: Request, payload: Optional[CreateChat] = None):
+    resume_id = payload.session_id if payload else None
+    if resume_id:
+        resume_id = _resumable_session_id(resume_id)
+    session = session_manager.create_session(resume_id)
     session_id = session['session_id']
     channel = session['channel']
 
