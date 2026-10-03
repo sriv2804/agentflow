@@ -12,6 +12,8 @@ chromadb>=1.5.9
 
 # Tools
 ddgs>=9.14.4
+httpx>=0.28.1
+beautifulsoup4>=4.12.3
 docstring_parser>=0.18.0
 
 # Config

@@ -4,6 +4,7 @@ from src.core.agent import Agent
 from src.flows.registry import register_flow
 from src.tools.load_tool_group import load_tool_group
 from src.tools.web_search import web_search
+from src.tools.web_fetch import web_fetch
 from src.tools.write_report import write_report
 from src.tools.skill_retriever import skill_retriever
 from src.tools.save_skill import save_skill, view_skill_template
@@ -20,7 +21,7 @@ def build_competitive_analysis_flow() -> Tuple[AgentsFlow, FlowContext]:
     web_tools = ToolGroup(
         name="web_tools",
         description="Search and fetch current information from the web",
-        tools=[web_search],
+        tools=[web_search, web_fetch],
         instructions=""
     )
 
