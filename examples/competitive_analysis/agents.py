@@ -11,8 +11,6 @@ from src.tools.save_skill import save_skill, view_skill_template
 from src.tools.common import ToolGroup
 from src.core.flow import AgentsFlow, FlowContext
 
-MODEL_NAME = "gemma4:26b-a4b-it-q4_K_M"
-MODEL_BACKEND = "ollama"
 PROMPTS_DIR = Path("examples/competitive_analysis/prompts")
 
 
@@ -55,8 +53,6 @@ After a successful run, save the research + delegation plan as a skill:
 
     researcher = Agent(
         agent_name="researcher",
-        model_name=MODEL_NAME,
-        model_backend=MODEL_BACKEND,
         tool_grps=[web_tools],
         always_on_tools=[load_tool_group],
         execution_prompt_path=PROMPTS_DIR / "researcher.md",
@@ -65,8 +61,6 @@ After a successful run, save the research + delegation plan as a skill:
 
     report_generator = Agent(
         agent_name="report_generator",
-        model_name=MODEL_NAME,
-        model_backend=MODEL_BACKEND,
         tool_grps=[reporting_tools],
         always_on_tools=[load_tool_group],
         execution_prompt_path=PROMPTS_DIR / "report_generator.md",
@@ -75,8 +69,6 @@ After a successful run, save the research + delegation plan as a skill:
 
     orchestrator = Agent(
         agent_name="orchestrator",
-        model_name=MODEL_NAME,
-        model_backend=MODEL_BACKEND,
         tool_grps=[memory_tools],
         always_on_tools=[load_tool_group],
         execution_prompt_path=PROMPTS_DIR / "orchestrator.md",

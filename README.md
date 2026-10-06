@@ -12,15 +12,24 @@ What it deliberately skips: native function-calling APIs (every backend speaks p
 
 ## Getting started
 
-You need Python 3.12+ and a [supported LLM backend](#supported-llm-backends). The demo flow is configured for Gemma 4 26B on [Ollama](https://ollama.com/), so with Ollama running locally:
+You need Python 3.12+ and a [supported LLM backend](#supported-llm-backends). Set your backend and model in the `llm` block of `config.yaml`:
+
+```yaml
+llm:
+  backend: "ollama"                       # or "openai" for any OpenAI-compatible endpoint
+  model_name: "gemma4:26b-a4b-it-q4_K_M"
+```
+
+Then install and run:
 
 ```bash
 git clone https://github.com/sriv2804/agentflow.git
 cd agentflow
 pip install -r requirements.txt
-ollama pull gemma4:26b-a4b-it-q4_K_M
 python -m src.tui.tui
 ```
+
+With the default Ollama setup, pull the model first (`ollama pull <model_name>`). For other backends, see [Supported LLM backends](#supported-llm-backends).
 
 This starts a session of the **competitive analysis** demo: three agents that compare two software tools for your team and write a sourced report. Type a comparison when prompted and answer the orchestrator's question:
 
@@ -40,7 +49,7 @@ Report saved to: .agentflow/81e27857-…/reports/slack_vs_microsoft_teams_compet
 Session id: 81e27857-…  (resume with --resume 81e27857-…)
 ```
 
-A run takes roughly 10–15 minutes on local hardware with Gemma 4 26B. Continue the conversation later with `python -m src.tui.tui --resume <session_id>`.
+A run takes roughly 10–15 minutes on local hardware with a ~26B model. Continue the conversation later with `python -m src.tui.tui --resume <session_id>`.
 
 To run the same flow behind HTTP/SSE instead, start the server with `uvicorn src.sse_server.app:app --port 8000` (see [Reference](#reference)).
 
@@ -123,7 +132,7 @@ python -m tests.scripts.competitive_analysis_e2e \
     --answer "Focus on features and pricing. We're a 25-person remote startup."
 ```
 
-The E2E script runs the flow over the real HTTP/SSE API (starting the server in-process unless `--base-url` is given) and answers clarifications from `--answer` values, then stdin. A run takes roughly 10–15 minutes with Gemma 4 26B on local hardware. Reports are written to `.agentflow/<session_id>/reports/`.
+The E2E script runs the flow over the real HTTP/SSE API (starting the server in-process unless `--base-url` is given) and answers clarifications from `--answer` values, then stdin. A run takes roughly 10–15 minutes with a ~26B model on local hardware. Reports are written to `.agentflow/<session_id>/reports/`.
 
 ---
 
@@ -252,13 +261,11 @@ This means the loop never silently swallows malformed output.
 
 ### Defining an agent
 
-Agents are constructed directly in Python — no YAML or config DSL:
+Agents are constructed directly in Python — no YAML or config DSL. The model comes from the `llm` block in `config.yaml` unless the agent overrides it:
 
 ```python
 Agent(
     agent_name="researcher",
-    model_name="gemma4:26b-a4b-it-q4_K_M",
-    model_backend="ollama",
     tool_grps=[web_tools],
     always_on_tools=[load_tool_group],
     execution_prompt_path=Path("examples/competitive_analysis/prompts/researcher.md"),
@@ -267,6 +274,7 @@ Agent(
 ```
 
 - `execution_prompt_path` — a markdown file defining the agent's role, persona, and instructions. This is the only agent-specific configuration.
+- `model_name`, `model_backend` (optional) — override the `config.yaml` default for this agent only.
 - `resolver` — either `"user"` (clarifications go to the human over the channel) or another agent's name (clarifications are routed to that agent by the flow).
 
 ### Wiring agents together
@@ -383,12 +391,12 @@ This keeps the static prompt prefix lean and lets the LLM load only what it need
 
 agentflow's contract with a model is plain text: the framework flattens the full context (role, tools, memory, scratchpad) into one prompt string, and expects one JSON action back. There is no dependency on native function calling or provider-specific message formats, so any model that can follow instructions works with zero changes to the agent loop.
 
-| Backend | `model_backend` | Notes |
-|---------|-----------------|-------|
-| Ollama (local) | `"ollama"` | `model_name` is any pulled Ollama model; talks to `localhost:11434` |
-| GitHub Models | `"openai"` | OpenAI-compatible endpoint; requires `GITHUB_TOKEN` in `.env` |
+| Backend | `backend` | Notes |
+|---------|-----------|-------|
+| Ollama | `"ollama"` | `model_name` is any pulled Ollama model; `base_url` defaults to `http://localhost:11434` |
+| OpenAI-compatible | `"openai"` | `base_url` defaults to GitHub Models; the API key is read from the env var named by `api_key_env` (default `GITHUB_TOKEN`, e.g. in `.env`) |
 
-The backend is chosen per agent (`model_name`, `model_backend` on `Agent(...)`), so one flow can mix models, e.g. a larger model for the orchestrator and a cheaper one for workers.
+The `llm` block in `config.yaml` sets the default for every agent. To mix models in one flow (e.g. a larger model for the orchestrator and a cheaper one for workers), pass `model_name` / `model_backend` on individual `Agent(...)` calls. An agent that switches backend uses that backend's default endpoint.
 
 ### Adding a provider
 
@@ -405,9 +413,9 @@ class MyProviderClient(LLMClient):
         ...
 ```
 
-Then add a branch for it in `LLM.__init__` (e.g. `backend == "my_provider"`) and set `model_backend="my_provider"` on the agents that should use it. Nothing else in the framework changes.
+Then add a branch for it in `LLM.__init__` (e.g. `backend == "my_provider"`) and set `backend: "my_provider"` in `config.yaml` (or `model_backend="my_provider"` on individual agents). Nothing else in the framework changes.
 
-**Model used in testing:** Gemma 4 26B via Ollama — consistently follows tool group loading rules and the JSON action contract. Stronger models are expected to produce better reports (fewer copying slips, better source handling) with the same flows.
+**Model used in testing:** Gemma 4 26B (`gemma4:26b-a4b-it-q4_K_M`) via Ollama, the `config.yaml` default — consistently follows tool group loading rules and the JSON action contract. Stronger models are expected to produce better reports (fewer copying slips, better source handling) with the same flows.
 ---
 
 ## Reference
@@ -420,6 +428,12 @@ Edit `config.yaml`:
 flow:
   name: competitive_analysis   # which registered flow to run (qa_agent, competitive_analysis)
 
+llm:
+  backend: ollama              # ollama | openai (any OpenAI-compatible endpoint)
+  model_name: gemma4:26b-a4b-it-q4_K_M
+  # base_url: http://localhost:11434   # optional, defaults per backend
+  # api_key_env: GITHUB_TOKEN          # openai only: env var holding the API key
+
 server:
   host: 0.0.0.0
   port: 8000
@@ -428,7 +442,7 @@ storage:
   working_dir: .agentflow      # sessions are stored under <working_dir>/<session_id>/
 ```
 
-For GitHub Models, add to `.env`:
+For the `openai` backend, put the API key in `.env` under the name set by `api_key_env` (default `GITHUB_TOKEN`):
 ```
 GITHUB_TOKEN=your_token_here
 ```

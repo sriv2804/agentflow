@@ -1,4 +1,5 @@
 import os
+from typing import Optional
 from abc import ABC, abstractmethod
 
 from openai import AsyncOpenAI
@@ -16,11 +17,16 @@ class LLMError(Exception):
 
 
 class OpenAIClient(LLMClient):
-    def __init__(self, model_name: str):
+    def __init__(
+        self,
+        model_name: str,
+        base_url: str = "https://models.inference.ai.azure.com",
+        api_key_env: str = "GITHUB_TOKEN",
+    ):
         self.model_name = model_name
         self._client = AsyncOpenAI(
-            api_key=os.environ["GITHUB_TOKEN"],
-            base_url="https://models.inference.ai.azure.com"
+            api_key=os.environ[api_key_env],
+            base_url=base_url
         )
 
     async def invoke(self, prompt: str) -> str:
@@ -51,11 +57,21 @@ class OllamaClient(LLMClient):
 
 
 class LLM:
-    def __init__(self, model_name: str, backend: str = "openai"):
+    def __init__(
+        self,
+        model_name: str,
+        backend: str = "openai",
+        base_url: Optional[str] = None,
+        api_key_env: Optional[str] = None,
+    ):
+        #only forward what's set so each client keeps its own defaults
+        opts = {"base_url": base_url} if base_url else {}
         if backend == "openai":
-            self.client: LLMClient = OpenAIClient(model_name)
+            if api_key_env:
+                opts["api_key_env"] = api_key_env
+            self.client: LLMClient = OpenAIClient(model_name, **opts)
         elif backend == "ollama":
-            self.client = OllamaClient(model_name)
+            self.client = OllamaClient(model_name, **opts)
         else:
             raise ValueError(f"Unknown backend: {backend!r}. Use 'openai' or 'ollama'.")
 

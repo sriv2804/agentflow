@@ -96,12 +96,10 @@ When you see a [SYSTEM] Memory pressure alert in your scratchpad:
 
     orchestrator = Agent(
         agent_name="orchestrator",
-        model_name="gemma4:26b-a4b-it-q4_K_M",
         tool_grps=[web_tools, compute_tools, memory_tools, long_term_memory_tools],
         always_on_tools=[load_tool_group],
         execution_prompt_path=Path("examples/qa_agent/prompts/orchestrator.md"),
-        resolver="user",
-        model_backend="ollama"
+        resolver="user"
     )
 
     flow = AgentsFlow(
