@@ -50,15 +50,37 @@ class Agent:
     def __init__(
         self,
         agent_name: str,
-        model_name: str,
         tool_grps : List[ToolGroup],
         always_on_tools : List[Tool],
         execution_prompt_path : Path,
         resolver : str,
-        model_backend : str = "openai"
+        model_name : Optional[str] = None,
+        model_backend : Optional[str] = None
     ):
         self.agent_name = agent_name
-        self.llm = LLM(model_name = model_name, backend = model_backend)
+
+        with open("config.yaml") as f:
+            config = yaml.safe_load(f)
+
+        #config.yaml `llm` is the default for every agent; args passed here override it
+        #so a flow can still mix models per agent
+        llm_cfg = config.get("llm", {})
+        model_name = model_name or llm_cfg.get("model_name")
+        if not model_name:
+            raise ValueError(
+                f"Agent '{agent_name}' has no model: set llm.model_name in config.yaml or pass model_name"
+            )
+        cfg_backend = llm_cfg.get("backend", "openai")
+        backend = model_backend or cfg_backend
+        #endpoint settings belong to the configured backend; an agent overriding
+        #the backend falls back to that backend's own defaults
+        same_backend = backend == cfg_backend
+        self.llm = LLM(
+            model_name = model_name,
+            backend = backend,
+            base_url = llm_cfg.get("base_url") if same_backend else None,
+            api_key_env = llm_cfg.get("api_key_env") if same_backend else None,
+        )
         self.tool_grps = tool_grps
         self.always_on_tools = always_on_tools
         self.prompt_template = PromptReader.read_prompt()
@@ -70,8 +92,6 @@ class Agent:
         self.resolver = resolver
         self.successors: Dict[str | "Agent"] = {}
 
-        with open("config.yaml") as f:
-            config = yaml.safe_load(f)
         storage_cfg = config.get("storage", {})
         self.working_dir = storage_cfg.get("working_dir", ".agentflow")
         self.tool_manager = ToolManager(tool_grps, always_on_tools)

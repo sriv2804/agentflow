@@ -5,6 +5,13 @@ server:
   host: "0.0.0.0"
   port: 8000
 
+# default LLM for every agent; an agent can still override model_name/model_backend in code
+llm:
+  backend: "ollama"                       # "ollama" or "openai" (any OpenAI-compatible endpoint)
+  model_name: "gemma4:26b-a4b-it-q4_K_M"
+  # base_url: "http://localhost:11434"    # optional, defaults per backend
+  # api_key_env: "GITHUB_TOKEN"           # openai only: env var holding the API key
+
 base_skill_path: "skills"
 
 storage:
