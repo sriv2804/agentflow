@@ -1,0 +1,25 @@
+# secrets: pass env vars at `docker run` instead
+.env
+
+# VCS, local state and debug output
+.git
+.agentflow/
+.agentflow-data/
+logs/
+
+# Python caches
+__pycache__/
+**/__pycache__/
+*.pyc
+
+# tests are not needed at runtime
+tests/
+
+# local virtualenvs
+.venv/
+venv/
+env/
+
+# editor / tool settings
+.vscode/
+.claude/

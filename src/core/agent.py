@@ -8,7 +8,7 @@ import yaml
 
 from src.core.memory import MemoryManager
 from src.tools.common import Tool, ToolCall, ToolManager, ToolContext, ToolGroup
-from src.utils.llm import LLM
+from src.utils.llm import LLM, llm_settings
 from src.utils.prompt import PromptReader
 from src.core.flow import Edge, FlowContext
 from src.core.skill_store import SkillStore
@@ -64,7 +64,7 @@ class Agent:
 
         #config.yaml `llm` is the default for every agent; args passed here override it
         #so a flow can still mix models per agent
-        llm_cfg = config.get("llm", {})
+        llm_cfg = llm_settings(config)  # AGENTFLOW_MODEL_* env vars override config.yaml
         model_name = model_name or llm_cfg.get("model_name")
         if not model_name:
             raise ValueError(

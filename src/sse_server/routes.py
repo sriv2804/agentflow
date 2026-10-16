@@ -31,6 +31,12 @@ def _resumable_session_id(session_id: str) -> str:
     return session_id
 
 
+@app.get("/healthz")
+async def healthz():
+    # liveness only: no LLM call, so probes stay cheap and work when the model is down
+    return {"status": "ok"}
+
+
 @app.post("/chats")
 async def create_chat(request: Request, payload: Optional[CreateChat] = None):
     resume_id = payload.session_id if payload else None
