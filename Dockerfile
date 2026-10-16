@@ -10,6 +10,10 @@ ENV PYTHONUNBUFFERED=1 \
 # Every later relative path (COPY, RUN, CMD) resolves against /app.
 WORKDIR /app
 
+# Prompt debug logs go here (the app's default is logs/ under the working dir); set explicitly so
+# the variable and the writable directory created below stay in sync. Override and mount to keep them.
+ENV AGENTFLOW_LOG_DIR=/app/logs
+
 # Create the unprivileged user that runs the app, plus the only dirs it may write to:
 # .agentflow/ (session data, mount a volume here) and logs/ (LLM prompt debug logs).
 RUN useradd --create-home --uid 1000 app \

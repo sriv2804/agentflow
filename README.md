@@ -394,9 +394,9 @@ agentflow's contract with a model is plain text: the framework flattens the full
 | Backend | `backend` | Notes |
 |---------|-----------|-------|
 | Ollama | `"ollama"` | `model_name` is any pulled Ollama model; `base_url` defaults to `http://localhost:11434` |
-| OpenAI-compatible | `"openai"` | `base_url` defaults to GitHub Models; the API key is read from the env var named by `api_key_env` (default `GITHUB_TOKEN`, e.g. in `.env`) |
+| OpenAI-compatible | `"openai"` | `base_url` is required (e.g. Gemini: `https://generativelanguage.googleapis.com/v1beta/openai/`); the API key is read from `AGENTFLOW_API_KEY`, or the env var named by `api_key_env` |
 
-The `llm` block in `config.yaml` sets the default for every agent. To mix models in one flow (e.g. a larger model for the orchestrator and a cheaper one for workers), pass `model_name` / `model_backend` on individual `Agent(...)` calls. An agent that switches backend uses that backend's default endpoint.
+The `llm` block in `config.yaml` sets the default for every agent. To mix models in one flow (e.g. a larger model for the orchestrator and a cheaper one for workers), pass `model_name` / `model_backend` on individual `Agent(...)` calls. An agent that switches backend uses that backend's default endpoint (ollama only; `openai` has no default). Env vars (`AGENTFLOW_MODEL_BACKEND`, `AGENTFLOW_MODEL_NAME`, `AGENTFLOW_MODEL_BASE_URL`, `AGENTFLOW_API_KEY`) override the `llm` block, see [docs/deployment.md](docs/deployment.md).
 
 ### Adding a provider
 
@@ -431,8 +431,8 @@ flow:
 llm:
   backend: ollama              # ollama | openai (any OpenAI-compatible endpoint)
   model_name: gemma4:26b-a4b-it-q4_K_M
-  # base_url: http://localhost:11434   # optional, defaults per backend
-  # api_key_env: GITHUB_TOKEN          # openai only: env var holding the API key
+  # base_url: http://localhost:11434   # optional for ollama; required for openai
+  # api_key_env: MY_PROVIDER_KEY       # openai only: env var holding the key if AGENTFLOW_API_KEY is unset
 
 server:
   host: 0.0.0.0
@@ -442,9 +442,9 @@ storage:
   working_dir: .agentflow      # sessions are stored under <working_dir>/<session_id>/
 ```
 
-For the `openai` backend, put the API key in `.env` under the name set by `api_key_env` (default `GITHUB_TOKEN`):
+For the `openai` backend, put the API key in `.env` as `AGENTFLOW_API_KEY`:
 ```
-GITHUB_TOKEN=your_token_here
+AGENTFLOW_API_KEY=your_key_here
 ```
 
 ### Running the server

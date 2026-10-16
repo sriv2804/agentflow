@@ -5,11 +5,16 @@ End-to-end run of the competitive_analysis flow over the real SSE API.
     python -m tests.scripts.competitive_analysis_e2e --answer "features and pricing, 20-person eng team"
     python -m tests.scripts.competitive_analysis_e2e --query "Figma vs Canva for a marketing team"
     python -m tests.scripts.competitive_analysis_e2e --base-url http://localhost:8000
+    python -m tests.scripts.competitive_analysis_e2e --base-url http://localhost:8000 --report-dir .agentflow-data
     python -m tests.scripts.competitive_analysis_e2e --query "..." --resume <session_id>
 
 Without --base-url, the FastAPI app is started in-process (flow name overridden
 to competitive_analysis). HITL clarifications are answered from --answer values
 in order, then from stdin.
+
+The report is looked up on the local filesystem under storage.working_dir from
+config.yaml. When the server runs in a container, pass --report-dir with the
+host directory mounted at the container's working dir (e.g. .agentflow-data).
 """
 import argparse
 import json
@@ -61,10 +66,11 @@ def wait_for_session_exit(session_id: str, timeout: float = 10):
         time.sleep(0.1)
 
 
-def find_report(session_id: str, started_at: float) -> Path | None:
-    with open("config.yaml") as f:
-        storage = yaml.safe_load(f).get("storage", {})
-    reports_dir = Path(storage.get("working_dir", ".agentflow")) / session_id / "reports"
+def find_report(session_id: str, started_at: float, report_dir: str | None = None) -> Path | None:
+    if report_dir is None:
+        with open("config.yaml") as f:
+            report_dir = yaml.safe_load(f).get("storage", {}).get("working_dir", ".agentflow")
+    reports_dir = Path(report_dir) / session_id / "reports"
     reports = [p for p in reports_dir.glob("*.md") if p.stat().st_mtime >= started_at]
     return max(reports, key=lambda p: p.stat().st_mtime) if reports else None
 
@@ -75,6 +81,11 @@ def main():
     parser.add_argument("--query", default=QUERY, help="initial user query")
     parser.add_argument("--resume", help="session_id of a previous run to resume")
     parser.add_argument("--answer", action="append", default=[], help="scripted HITL answer (repeatable)")
+    parser.add_argument(
+        "--report-dir",
+        help="local path of the server's session storage (default: storage.working_dir from config.yaml); "
+             "for a container, the host side of the volume mounted at /app/.agentflow",
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/") if args.base_url else start_in_process_server()
@@ -109,7 +120,7 @@ def main():
 
     if not args.base_url:
         wait_for_session_exit(chat["session_id"])
-    report = find_report(chat["session_id"], started_at)
+    report = find_report(chat["session_id"], started_at, args.report_dir)
     print("\n" + "=" * 60)
     print(f"HITL clarifications asked: {clarifications}")
     print(f"Report file: {report.resolve() if report else 'NOT FOUND'}")

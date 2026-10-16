@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import os
 import re
 import yaml
 
@@ -266,8 +267,8 @@ class Agent:
                     working_memory=agent_memory_manager.working_memory or "(empty)"
                 )
                 # ---- LOGGING LLM PROMPT -----
-                log_dir = Path("logs")
-                log_dir.mkdir(exist_ok=True)
+                log_dir = Path(os.environ.get("AGENTFLOW_LOG_DIR") or "logs")
+                log_dir.mkdir(parents=True, exist_ok=True)
                 call_count = getattr(self, '_prompt_log_count', 0) + 1
                 self._prompt_log_count = call_count
                 log_file = log_dir / f"{self.agent_name}_prompt_{call_count}.txt"
