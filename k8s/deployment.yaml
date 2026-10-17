@@ -1,0 +1,110 @@
+# Runs the agentflow SSE server. The Deployment owns a ReplicaSet, which keeps the
+# requested number of pods running and recreates them if they die or are deleted.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: agentflow
+  labels:
+    app.kubernetes.io/name: agentflow
+spec:
+  # One pod: sessions live in this process's memory while they run, and the data
+  # volume below is ReadWriteOnce, so a second replica could not share it anyway.
+  replicas: 1
+  # Recreate: on an update, stop the old pod before starting the new one. The default
+  # (RollingUpdate) starts the new pod first, so for a moment two pods would write
+  # to the same single-writer volume (or the new one would hang waiting to mount it).
+  strategy:
+    type: Recreate
+  # Which pods this Deployment manages; must match the template labels below.
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: agentflow
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: agentflow
+    spec:
+      # Pod-level security settings, applied to every container and volume.
+      securityContext:
+        # Refuse to start a container that would run as root (uid 0).
+        runAsNonRoot: true
+        # uid/gid of the image's "app" user (useradd --uid 1000 in the Dockerfile).
+        runAsUser: 1000
+        runAsGroup: 1000
+        # Volumes that support it are made group-owned by gid 1000 and group-writable
+        # when mounted, so the app user can write to the data volume. On kind the PVC is
+        # a hostPath directory, which is skipped (it is created 0777, so writes still work);
+        # the emptyDir and cloud disks do get it.
+        fsGroup: 1000
+      # By default Kubernetes injects <SERVICE>_PORT / <SERVICE>_SERVICE_HOST variables for
+      # every Service in the namespace. Our Service is named agentflow, so that would add
+      # AGENTFLOW_PORT=tcp://10.96.x.x:8000 etc. into the app's own AGENTFLOW_ prefix.
+      # Off: the app finds other services through DNS names instead.
+      enableServiceLinks: false
+      # Not set, so the default of 30s applies: after SIGTERM, Kubernetes waits this
+      # long for the process to exit before sending SIGKILL.
+      # terminationGracePeriodSeconds: 30
+      containers:
+        - name: agentflow
+          # Loaded into the kind node with `kind load docker-image agentflow:dev`;
+          # there is no registry to pull it from.
+          image: agentflow:dev
+          # Use the image already on the node; only pull if it is missing. (For a
+          # :latest tag the default would be Always, which would fail here.)
+          imagePullPolicy: IfNotPresent
+          ports:
+            - name: http
+              containerPort: 8000   # uvicorn --port 8000 (Dockerfile CMD)
+          # Every key of the ConfigMap and the Secret becomes an environment variable.
+          envFrom:
+            - configMapRef:
+                name: agentflow-config
+            - secretRef:
+                name: agentflow-secrets
+          volumeMounts:
+            - name: data
+              mountPath: /app/.agentflow   # storage.working_dir (relative to /app)
+            - name: logs
+              mountPath: /app/logs         # AGENTFLOW_LOG_DIR
+          # Readiness: "may this pod receive traffic?" While it fails, the pod is
+          # removed from the Service's endpoints, but the container is NOT restarted.
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+          # Liveness: "is the process stuck?" After failureThreshold failures in a
+          # row, the kubelet kills and restarts the container. Kept loose: the first
+          # check is at 30s and it takes 3 failures 15s apart (~75s at the earliest),
+          # so a slow start (imports, ChromaDB) never triggers a restart loop.
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: http
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            timeoutSeconds: 5
+            failureThreshold: 3
+          resources:
+            # Requests: what the scheduler reserves on a node for this pod.
+            requests:
+              memory: 512Mi
+              cpu: 250m
+            # Limits: memory over 1Gi gets the container OOMKilled (and restarted).
+            # No CPU limit on purpose: a CPU limit throttles the process even when the
+            # node has idle CPU, which slows startup and request handling. Without one the
+            # pod can use spare CPU, and the 250m request still guarantees its share under
+            # contention. The tradeoff: a busy pod can take CPU other pods' requests do not cover.
+            limits:
+              memory: 1Gi
+      volumes:
+        # The PersistentVolumeClaim from pvc.yaml: survives pod restarts.
+        - name: data
+          persistentVolumeClaim:
+            claimName: agentflow-data
+        # Scratch space that lives as long as the pod; prompt logs are disposable.
+        - name: logs
+          emptyDir: {}

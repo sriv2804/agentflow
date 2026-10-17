@@ -84,9 +84,85 @@ timeout 1200 python -m tests.scripts.competitive_analysis_e2e \
 
 `--report-dir` is the host side of the `/app/.agentflow` volume; the script looks for the session's report there. Use a client-side `timeout` (see Known issues).
 
+## Phase 1+2: Kubernetes (local kind)
+
+Runs the same `agentflow:dev` image on a single-node [kind](https://kind.sigs.k8s.io/) cluster (Kubernetes in a Docker container). The manifests are in `k8s/`. Tested with kind v0.33.0 (node image `kindest/node:v1.37.0`) and kubectl v1.37.
+
+### Create the cluster and load the image
+
+```bash
+# kind as a user binary (kubectl is preinstalled in the Codespace)
+curl -fsSLo ~/.local/bin/kind https://github.com/kubernetes-sigs/kind/releases/download/v0.33.0/kind-linux-amd64
+chmod +x ~/.local/bin/kind
+
+kind create cluster --name agentflow          # ~1-2 min; sets the kubectl context to kind-agentflow
+docker build -t agentflow:dev .
+kind load docker-image agentflow:dev --name agentflow
+```
+
+The kind node is a Docker container with its own container runtime (containerd) and image store; it cannot see images in the Codespace's Docker daemon. `kind load` copies the image into the node. Without it the kubelet tries to pull `docker.io/library/agentflow:dev`, which does not exist, and the pod sits in `ErrImagePull` / `ImagePullBackOff`. Re-run `kind load` (then `kubectl rollout restart deployment/agentflow`) after every rebuild.
+
+**Codespaces: pods have no internet access until you allow the kind bridge.** See Known issues; run this once after creating the cluster (and again after a Codespace restart):
+
+```bash
+BR=br-$(docker network inspect kind -f '{{.Id}}' | cut -c1-12)
+sudo iptables-legacy -I FORWARD 1 -i "$BR" -j ACCEPT
+sudo iptables-legacy -I FORWARD 2 -o "$BR" -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT
+docker exec agentflow-control-plane getent hosts generativelanguage.googleapis.com   # should print an address
+```
+
+### Create the Secret, apply, port-forward
+
+```bash
+# the key goes from your shell straight into the cluster, never into a file
+kubectl create secret generic agentflow-secrets --from-literal=AGENTFLOW_API_KEY="$AGENTFLOW_API_KEY"
+
+kubectl apply -k k8s/                         # not -f k8s/: that would also apply secret.example.yaml
+kubectl wait --for=condition=Ready pod -l app.kubernetes.io/name=agentflow --timeout=180s
+
+kubectl port-forward service/agentflow 8000:8000   # keep running; new terminal for the rest
+curl localhost:8000/healthz                         # {"status":"ok"}
+```
+
+`port-forward service/...` picks one pod when it starts and stays attached to it. When that pod is replaced (delete, rollout restart, config change) the forward fails with `lost connection to pod` and must be restarted. Traffic inside the cluster (`http://agentflow:8000`) follows the Service to the new pod automatically.
+
+End-to-end check (the report is on the PVC inside the cluster, so the script prints `Report file: NOT FOUND`; check it with `kubectl exec`):
+
+```bash
+timeout 1200 python -m tests.scripts.competitive_analysis_e2e --base-url http://localhost:8000 \
+  --answer "features, pricing and integrations for a 20-person eng team" < /dev/null
+kubectl exec deploy/agentflow -- ls /app/.agentflow/<session_id>/reports
+```
+
+### What each manifest does
+
+| File | Object | What it does |
+|---|---|---|
+| `k8s/kustomization.yaml` | – | Lists the files `kubectl apply -k k8s/` applies; leaves out `secret.example.yaml`. |
+| `k8s/configmap.yaml` | ConfigMap `agentflow-config` | The `AGENTFLOW_MODEL_*` and `AGENTFLOW_LOG_DIR` env vars (Gemini endpoint and model). |
+| `k8s/secret.example.yaml` | Secret `agentflow-secrets` (example only) | Shape of the Secret holding `AGENTFLOW_API_KEY`; never applied. The real one is created with `kubectl create secret`. |
+| `k8s/pvc.yaml` | PersistentVolumeClaim `agentflow-data` | 1Gi ReadWriteOnce volume for session data, mounted at `/app/.agentflow`; survives pod restarts. |
+| `k8s/deployment.yaml` | Deployment `agentflow` | One replica, `Recreate` strategy (single-writer volume), env from the ConfigMap and Secret, PVC plus an `emptyDir` for `/app/logs`, non-root, `/healthz` probes, memory request 512Mi / limit 1Gi, CPU request 250m and no CPU limit. |
+| `k8s/service.yaml` | Service `agentflow` (ClusterIP) | Stable in-cluster name and IP on port 8000, routing to Ready pods with label `app.kubernetes.io/name=agentflow`. |
+
+### Operating notes
+
+- **Config changes need a restart.** Env vars from a ConfigMap are read when the container starts. After `kubectl apply -k k8s/` with a new value, the running pod keeps the old one; run `kubectl rollout restart deployment/agentflow`.
+- **Memory.** Measured in this run: ~150Mi idle, up to ~540Mi during a competitive-analysis flow. With a 200Mi limit the container was OOMKilled (exit 137) within 2 s of the first query and restarted by the kubelet. The request must be <= the limit, or the API server rejects the Deployment.
+- **Volume ownership.** kind's `local-path` provisioner backs the PVC with a `hostPath` directory created as `root:root 0777`; `fsGroup` is not applied to `hostPath` volumes, so the app can write only because the directory is world-writable. (The `emptyDir` at `/app/logs` does get `fsGroup` 1000.) On a cloud storage class `fsGroup` takes effect.
+- **Prompt logs are per pod.** `/app/logs` is an `emptyDir`; it is deleted with the pod.
+
 ## Known issues
 
 - **SSE stream hangs when the flow fails.** If an LLM call fails for good (e.g. retries exhausted), the output stream never sends a `done` message and the client waits forever. Always use a client-side timeout. Being fixed separately.
+- **A pod stopped mid-flow loses that session's conversation.** Observed on kind (pod deleted while a flow was running a web search):
+  - The kubelet sends SIGTERM. Uvicorn (PID 1) starts a graceful shutdown (`Shutting down`, `Waiting for connections to close`) but waits for the open SSE stream, which never closes on its own. The flow runs on its own event loop thread and is not cancelled: it kept calling tools for another ~14 s.
+  - After `terminationGracePeriodSeconds` (default 30, not set in `deployment.yaml`) the kubelet sends SIGKILL; the pod ended in `Error` 30.5 s after the delete.
+  - Conversation history is written only when a flow ends (`finally` in `run_on_channel`), and that never ran: the session directory had `chromadb/` and `skills_*/` but no `conversation_history_*.json`.
+  - `POST /chats {"session_id": ...}` still accepts the session (the directory exists), but the agent starts with an empty history: asked what was being compared, it answered "We haven't started a competitive analysis project yet".
+  - Not fixed here. Directions: handle shutdown in the FastAPI lifespan (cancel running flows so their `finally` saves history, and close SSE streams), set uvicorn's `--timeout-graceful-shutdown` below the grace period, and/or save history after each turn instead of only at the end.
+- **Codespaces: kind pods have no internet access.** The Codespace has two iptables rulesets that the kernel applies together: the current Docker daemon's (nftables, correct) and a leftover `iptables-legacy` one whose `FORWARD` policy is `DROP` and only allows `docker0`. Traffic from the kind bridge network (`br-<id>`) is dropped there, so the node's DNS lookups time out (CoreDNS logs `read udp ...->172.18.0.1:53: i/o timeout`) and LLM calls fail with `ConnectTimeout`. The default bridge works, which is why plain `docker run` (Phase 0) is not affected. Fix: the two `iptables-legacy` rules in "Create the cluster and load the image"; they do not survive a Codespace restart.
+- **Service links collide with the `AGENTFLOW_` prefix.** For a Service named `agentflow`, Kubernetes injects `AGENTFLOW_PORT=tcp://<ip>:8000`, `AGENTFLOW_SERVICE_HOST`, etc. into every pod in the namespace. The app reads none of these today, but `deployment.yaml` sets `enableServiceLinks: false` so a future `AGENTFLOW_PORT` setting cannot be overridden by accident.
 - **Unit tests already failing on `main`/HEAD** (they predate Phase 0 and are not fixed here):
   - `tests/unit/test_agent.py`: `test_rshift_registers_under_default`, `test_sub_rshift_registers_under_named_action`, `test_conditional_transition_rshift_returns_dest_agent`, `test_invalid_action_type_raises_type_error`, `test_parse_llm_output_returns_valid_structure`
   - `tests/unit/test_agent_handoff.py`: `test_trail_is_cleared_between_handoffs`, `test_yield_is_recorded_in_own_history`, `test_recall_store_uses_real_sender_role`, `test_storage_is_scoped_to_runtime_session_id`, `test_resumed_session_restores_conversation_history`, `test_new_session_starts_with_empty_history`

@@ -1,0 +1,20 @@
+# A stable name and virtual IP in front of the agentflow pod. Pods get a new IP every
+# time they are recreated; the Service keeps tracking whichever pods match its selector
+# and are Ready (readinessProbe passing), and only sends traffic to those.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentflow
+  labels:
+    app.kubernetes.io/name: agentflow
+spec:
+  # ClusterIP: reachable only inside the cluster (e.g. http://agentflow:8000 from
+  # another pod). From the Codespace, use `kubectl port-forward service/agentflow 8000:8000`.
+  type: ClusterIP
+  # Must match the pod template labels in deployment.yaml.
+  selector:
+    app.kubernetes.io/name: agentflow
+  ports:
+    - name: http
+      port: 8000          # port on the Service's IP
+      targetPort: http    # the container port named "http" (8000) in the pod

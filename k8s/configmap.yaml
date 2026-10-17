@@ -1,0 +1,19 @@
+# Non-secret settings for the agentflow container. The Deployment loads every key
+# here as an environment variable (envFrom), so these override the llm block in the
+# config.yaml baked into the image (see docs/deployment.md, "Environment variables").
+#
+# Pods read env vars only when their container starts: after changing a value,
+# `kubectl apply` this file and then `kubectl rollout restart deployment/agentflow`.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: agentflow-config
+  labels:
+    app.kubernetes.io/name: agentflow
+data:
+  # Any OpenAI-compatible endpoint; Gemini is used through its compatibility layer.
+  AGENTFLOW_MODEL_BACKEND: "openai"
+  AGENTFLOW_MODEL_BASE_URL: "https://generativelanguage.googleapis.com/v1beta/openai/"
+  AGENTFLOW_MODEL_NAME: "gemini-3.1-flash-lite"
+  # Prompt debug logs; the Deployment mounts a scratch emptyDir volume here.
+  AGENTFLOW_LOG_DIR: "/app/logs"

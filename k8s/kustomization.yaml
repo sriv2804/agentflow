@@ -1,0 +1,9 @@
+# The objects `kubectl apply -k k8s/` creates. secret.example.yaml is left out on
+# purpose: the real Secret is created with `kubectl create secret` (see that file).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml

@@ -1,0 +1,20 @@
+# A request for 1Gi of disk for session data (history, working memory, ChromaDB,
+# reports under /app/.agentflow). Unlike the container filesystem, it outlives pods:
+# a replacement pod mounts the same volume and can resume stored sessions.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentflow-data
+  labels:
+    app.kubernetes.io/name: agentflow
+spec:
+  # ReadWriteOnce: the volume can be mounted read-write by one node at a time.
+  # Together with replicas: 1 and the Recreate strategy, only one pod writes to it.
+  accessModes:
+    - ReadWriteOnce
+  resources:
+    requests:
+      storage: 1Gi
+  # No storageClassName: the cluster default is used. On kind that is "standard"
+  # (rancher local-path), which creates a directory on the node and binds the
+  # volume only once a pod using it is scheduled (WaitForFirstConsumer).
