@@ -38,6 +38,11 @@ RUN python -c "from chromadb.utils.embedding_functions import ONNXMiniLM_L6_V2 a
 # Files stay root-owned, so the app can read but not modify its own code. config.yaml comes along here.
 COPY . .
 
+# The git commit this image was built from, reported by GET /healthz. Declared after COPY so
+# a new value only rebuilds this cheap layer. Build with --build-arg AGENTFLOW_VERSION=$(git rev-parse --short HEAD).
+ARG AGENTFLOW_VERSION=dev
+ENV AGENTFLOW_VERSION=$AGENTFLOW_VERSION
+
 # Document the port uvicorn listens on (publishing still needs `-p`).
 EXPOSE 8000
 

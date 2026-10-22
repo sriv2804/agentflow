@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -33,8 +34,9 @@ def _resumable_session_id(session_id: str) -> str:
 
 @app.get("/healthz")
 async def healthz():
-    # liveness only: no LLM call, so probes stay cheap and work when the model is down
-    return {"status": "ok"}
+    # liveness only: no LLM call, so probes stay cheap and work when the model is down.
+    # version is the git commit the image was built from (Dockerfile build arg), "dev" otherwise
+    return {"status": "ok", "version": os.environ.get("AGENTFLOW_VERSION", "dev")}
 
 
 @app.post("/chats")
