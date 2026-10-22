@@ -15,7 +15,7 @@ images:
   # matches `image: agentflow:dev` in base/deployment.yaml
   - name: agentflow
     newName: asia-south1-docker.pkg.dev/project-80856c2d-bafd-40a6-8f8/agentflow/agentflow
-    newTag: TBD
+    newTag: 044cd10
 patches:
   - path: service-loadbalancer.yaml
   - path: pvc.yaml
