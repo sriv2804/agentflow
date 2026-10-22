@@ -1,0 +1,10 @@
+# Shared by both overlays (k8s/overlays/kind, k8s/overlays/gke); apply an overlay, not
+# this directory. secret.example.yaml is left out on purpose: the real Secret is
+# created with `kubectl create secret` (see that file).
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - configmap.yaml
+  - pvc.yaml
+  - deployment.yaml
+  - service.yaml

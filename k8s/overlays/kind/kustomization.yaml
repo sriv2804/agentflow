@@ -1,0 +1,9 @@
+# Local kind cluster: the base as is. The image agentflow:dev is copied into the node
+# with `kind load docker-image`, the Service stays ClusterIP (use port-forward), and the
+# PVC uses kind's default storage class (local-path).
+#
+#   kubectl apply -k k8s/overlays/kind
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base

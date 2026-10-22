@@ -1,0 +1,11 @@
+# LoadBalancer: GKE's service controller creates a Google Cloud external passthrough
+# Network Load Balancer (a regional forwarding rule with a public IP, a backend pointing
+# at the node VMs, a health check and firewall rules) and writes the IP into
+# status.loadBalancer. Anyone on the internet can reach port 8000; the app requires
+# the bearer token from AGENTFLOW_AUTH_TOKEN on every route except /healthz.
+apiVersion: v1
+kind: Service
+metadata:
+  name: agentflow
+spec:
+  type: LoadBalancer

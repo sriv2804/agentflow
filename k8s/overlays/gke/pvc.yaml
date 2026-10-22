@@ -1,0 +1,13 @@
+# standard-rwo: GKE's default class, a pd-balanced persistent disk created by the
+# Compute Engine PD CSI driver when the pod is first scheduled (WaitForFirstConsumer).
+# 10Gi because pd-balanced disks cannot be smaller; a 1Gi request would be rounded up anyway.
+# The disk is zonal: it can only attach to a node VM in the same zone.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: agentflow-data
+spec:
+  storageClassName: standard-rwo
+  resources:
+    requests:
+      storage: 10Gi

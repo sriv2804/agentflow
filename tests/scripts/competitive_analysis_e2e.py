@@ -15,9 +15,17 @@ in order, then from stdin.
 The report is looked up on the local filesystem under storage.working_dir from
 config.yaml. When the server runs in a container, pass --report-dir with the
 host directory mounted at the container's working dir (e.g. .agentflow-data).
+
+If AGENTFLOW_AUTH_TOKEN is set, every request sends "Authorization: Bearer <token>"
+(needed when the server has the same variable set, e.g. on GKE). It is read from
+the environment only, so the token stays out of shell history and `ps`:
+
+    AGENTFLOW_AUTH_TOKEN="$(cat ~/.agentflow-token)" python -m tests.scripts.competitive_analysis_e2e \
+        --base-url http://<EXTERNAL-IP>:8000
 """
 import argparse
 import json
+import os
 import threading
 import time
 import urllib.request
@@ -42,16 +50,22 @@ def start_in_process_server() -> str:
     return f"http://127.0.0.1:{IN_PROCESS_PORT}"
 
 
+def auth_headers() -> dict:
+    token = os.environ.get("AGENTFLOW_AUTH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def post_json(url: str, payload: dict | None = None) -> dict:
     data = json.dumps(payload or {}).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json", **auth_headers()}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req) as resp:
         body = resp.read()
     return json.loads(body) if body else {}
 
 
 def iter_sse(url: str):
-    with urllib.request.urlopen(url) as resp:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=auth_headers())) as resp:
         for raw in resp:
             line = raw.decode().strip()
             if line.startswith("data: "):

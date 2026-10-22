@@ -1,0 +1,21 @@
+# GKE: the base plus what a real cloud cluster needs.
+#
+#   kubectl apply -k k8s/overlays/gke
+#
+# - images: pull from Artifact Registry instead of the locally loaded agentflow:dev.
+#   The tag is a git commit SHA (deploy/gke-up.sh overrides it per deploy).
+# - service-loadbalancer.yaml: Service type LoadBalancer, so GKE creates a Google
+#   Cloud load balancer with a public IP in front of the pod.
+# - pvc.yaml: a Compute Engine persistent disk (pd-balanced) of the smallest size it supports.
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+resources:
+  - ../../base
+images:
+  # matches `image: agentflow:dev` in base/deployment.yaml
+  - name: agentflow
+    newName: asia-south1-docker.pkg.dev/project-80856c2d-bafd-40a6-8f8/agentflow/agentflow
+    newTag: TBD
+patches:
+  - path: service-loadbalancer.yaml
+  - path: pvc.yaml
