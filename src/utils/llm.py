@@ -1,8 +1,10 @@
+import asyncio
 import os
+import re
 from typing import Optional
 from abc import ABC, abstractmethod
 
-from openai import AsyncOpenAI
+from openai import AsyncOpenAI, InternalServerError, RateLimitError
 import ollama as ollama_client
 
 
@@ -17,6 +19,21 @@ class LLMError(Exception):
 
 
 API_KEY_ENV = "AGENTFLOW_API_KEY"
+
+#the SDK already retries 429s and 5xx, but only twice with sub-second backoff, and it only honours
+#a Retry-After header; Gemini puts the wait in the error body instead ("Please retry in 26.6s") and
+#returns frequent transient 503s under load, so both are retried here once the SDK gives up
+LLM_RETRIES = 5
+MAX_RETRY_WAIT = 120.0  # a longer hint means a daily quota is exhausted: fail instead of hanging
+_RETRY_DELAY_RE = re.compile(r"(?:retryDelay['\"]?:\s*['\"]|retry in\s+)(\d+(?:\.\d+)?)s", re.IGNORECASE)
+
+
+def retry_wait(err: Exception, attempt: int) -> float:
+    """Server-suggested wait (429s carry one), else exponential backoff (2s, 4s, 8s, ...)."""
+    match = _RETRY_DELAY_RE.search(str(getattr(err, "body", None) or err))
+    if match:
+        return float(match.group(1)) + 1.0  # small margin so the window has actually rolled over
+    return min(2.0 * 2 ** attempt, 60.0)
 
 
 def llm_settings(config: dict) -> dict:
@@ -81,14 +98,21 @@ class OpenAIClient(LLMClient):
         )
 
     async def invoke(self, prompt: str) -> str:
-        try:
-            response = await self._client.chat.completions.create(
-                model=self.model_name,
-                messages=[{"role": "user", "content": prompt}],
-            )
-            return response.choices[0].message.content
-        except Exception as e:
-            raise LLMError(f"OpenAI call failed: {e}") from e
+        for attempt in range(LLM_RETRIES + 1):
+            try:
+                response = await self._client.chat.completions.create(
+                    model=self.model_name,
+                    messages=[{"role": "user", "content": prompt}],
+                )
+                return response.choices[0].message.content
+            except (RateLimitError, InternalServerError) as e:
+                wait = retry_wait(e, attempt)
+                if attempt == LLM_RETRIES or wait > MAX_RETRY_WAIT:
+                    raise LLMError(f"OpenAI call failed after {attempt + 1} attempts: {e}") from e
+                print(f"LLM call failed ({e.status_code}), retrying in {wait:.0f}s ({attempt + 1}/{LLM_RETRIES})")
+                await asyncio.sleep(wait)
+            except Exception as e:
+                raise LLMError(f"OpenAI call failed: {e}") from e
 
 
 class OllamaClient(LLMClient):
