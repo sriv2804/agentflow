@@ -16,16 +16,67 @@ class LLMError(Exception):
     """Raised when an LLM call fails."""
 
 
+API_KEY_ENV = "AGENTFLOW_API_KEY"
+
+
+def llm_settings(config: dict) -> dict:
+    """config.yaml `llm` block with the AGENTFLOW_MODEL_* env vars applied on top."""
+    llm_cfg = dict(config.get("llm") or {})
+    env_backend = os.environ.get("AGENTFLOW_MODEL_BACKEND")
+    if env_backend and env_backend != llm_cfg.get("backend"):
+        #base_url / api_key_env in config.yaml belong to the configured backend,
+        #so switching backend from the env falls back to the new backend's defaults
+        llm_cfg = {"backend": env_backend, "model_name": llm_cfg.get("model_name")}
+    if os.environ.get("AGENTFLOW_MODEL_NAME"):
+        llm_cfg["model_name"] = os.environ["AGENTFLOW_MODEL_NAME"]
+    if os.environ.get("AGENTFLOW_MODEL_BASE_URL"):
+        llm_cfg["base_url"] = os.environ["AGENTFLOW_MODEL_BASE_URL"]
+    return llm_cfg
+
+
+def resolve_api_key(api_key_env: Optional[str] = None) -> Optional[str]:
+    """AGENTFLOW_API_KEY first, then the env var named by llm.api_key_env, if any."""
+    for name in (API_KEY_ENV, api_key_env):
+        if name and os.environ.get(name):
+            return os.environ[name]
+    return None
+
+
+def check_llm_settings(llm_cfg: dict) -> None:
+    """Fail fast (at server startup) instead of on the first chat."""
+    backend = llm_cfg.get("backend", "openai")
+    if backend not in ("openai", "ollama"):
+        raise ValueError(f"Unknown LLM backend: {backend!r}. Use 'openai' or 'ollama'.")
+    if not llm_cfg.get("model_name"):
+        raise ValueError("No LLM model configured: set llm.model_name in config.yaml or AGENTFLOW_MODEL_NAME.")
+    if backend == "openai":
+        if not llm_cfg.get("base_url"):
+            raise ValueError(
+                "The 'openai' LLM backend needs an endpoint: set llm.base_url in config.yaml or AGENTFLOW_MODEL_BASE_URL."
+            )
+        if not resolve_api_key(llm_cfg.get("api_key_env")):
+            raise ValueError(f"The 'openai' LLM backend needs an API key: set {_key_hint(llm_cfg.get('api_key_env'))}.")
+
+
+def _key_hint(api_key_env: Optional[str]) -> str:
+    return f"{API_KEY_ENV} (or {api_key_env})" if api_key_env else API_KEY_ENV
+
+
 class OpenAIClient(LLMClient):
     def __init__(
         self,
         model_name: str,
-        base_url: str = "https://models.inference.ai.azure.com",
-        api_key_env: str = "GITHUB_TOKEN",
+        base_url: Optional[str] = None,
+        api_key_env: Optional[str] = None,
     ):
         self.model_name = model_name
+        if not base_url:
+            raise LLMError("No endpoint for the openai backend: set llm.base_url in config.yaml or AGENTFLOW_MODEL_BASE_URL.")
+        api_key = resolve_api_key(api_key_env)
+        if not api_key:
+            raise LLMError(f"No API key for the openai backend: set {_key_hint(api_key_env)}.")
         self._client = AsyncOpenAI(
-            api_key=os.environ[api_key_env],
+            api_key=api_key,
             base_url=base_url
         )
 
