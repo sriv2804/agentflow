@@ -3,12 +3,13 @@ from typing import Any, Dict, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
 import json
+import os
 import re
 import yaml
 
 from src.core.memory import MemoryManager
 from src.tools.common import Tool, ToolCall, ToolManager, ToolContext, ToolGroup
-from src.utils.llm import LLM
+from src.utils.llm import LLM, llm_settings
 from src.utils.prompt import PromptReader
 from src.core.flow import Edge, FlowContext
 from src.core.skill_store import SkillStore
@@ -64,7 +65,7 @@ class Agent:
 
         #config.yaml `llm` is the default for every agent; args passed here override it
         #so a flow can still mix models per agent
-        llm_cfg = config.get("llm", {})
+        llm_cfg = llm_settings(config)  # AGENTFLOW_MODEL_* env vars override config.yaml
         model_name = model_name or llm_cfg.get("model_name")
         if not model_name:
             raise ValueError(
@@ -266,8 +267,8 @@ class Agent:
                     working_memory=agent_memory_manager.working_memory or "(empty)"
                 )
                 # ---- LOGGING LLM PROMPT -----
-                log_dir = Path("logs")
-                log_dir.mkdir(exist_ok=True)
+                log_dir = Path(os.environ.get("AGENTFLOW_LOG_DIR") or "logs")
+                log_dir.mkdir(parents=True, exist_ok=True)
                 call_count = getattr(self, '_prompt_log_count', 0) + 1
                 self._prompt_log_count = call_count
                 log_file = log_dir / f"{self.agent_name}_prompt_{call_count}.txt"

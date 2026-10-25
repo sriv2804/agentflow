@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 import uuid
 from pathlib import Path
 from typing import Optional
@@ -29,6 +30,13 @@ def _resumable_session_id(session_id: str) -> str:
     if not (Path(working_dir) / session_id).is_dir():
         raise HTTPException(status_code=404, detail="No stored session with this id")
     return session_id
+
+
+@app.get("/healthz")
+async def healthz():
+    # liveness only: no LLM call, so probes stay cheap and work when the model is down.
+    # version comes from AGENTFLOW_VERSION if set, "dev" otherwise
+    return {"status": "ok", "version": os.environ.get("AGENTFLOW_VERSION", "dev")}
 
 
 @app.post("/chats")

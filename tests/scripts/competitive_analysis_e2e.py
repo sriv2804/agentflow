@@ -5,14 +5,27 @@ End-to-end run of the competitive_analysis flow over the real SSE API.
     python -m tests.scripts.competitive_analysis_e2e --answer "features and pricing, 20-person eng team"
     python -m tests.scripts.competitive_analysis_e2e --query "Figma vs Canva for a marketing team"
     python -m tests.scripts.competitive_analysis_e2e --base-url http://localhost:8000
+    python -m tests.scripts.competitive_analysis_e2e --base-url http://localhost:8000 --report-dir /path/to/storage
     python -m tests.scripts.competitive_analysis_e2e --query "..." --resume <session_id>
 
 Without --base-url, the FastAPI app is started in-process (flow name overridden
 to competitive_analysis). HITL clarifications are answered from --answer values
 in order, then from stdin.
+
+The report is looked up on the local filesystem under storage.working_dir from
+config.yaml. When the server's storage lives elsewhere (another checkout, a
+mounted volume), pass --report-dir with its local path.
+
+If AGENTFLOW_AUTH_TOKEN is set, every request sends "Authorization: Bearer <token>"
+(needed when the server has the same variable set). It is read from the
+environment only, so the token stays out of shell history and `ps`:
+
+    AGENTFLOW_AUTH_TOKEN="$(cat ~/.agentflow-token)" python -m tests.scripts.competitive_analysis_e2e \
+        --base-url http://<host>:8000
 """
 import argparse
 import json
+import os
 import threading
 import time
 import urllib.request
@@ -37,16 +50,22 @@ def start_in_process_server() -> str:
     return f"http://127.0.0.1:{IN_PROCESS_PORT}"
 
 
+def auth_headers() -> dict:
+    token = os.environ.get("AGENTFLOW_AUTH_TOKEN")
+    return {"Authorization": f"Bearer {token}"} if token else {}
+
+
 def post_json(url: str, payload: dict | None = None) -> dict:
     data = json.dumps(payload or {}).encode()
-    req = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    headers = {"Content-Type": "application/json", **auth_headers()}
+    req = urllib.request.Request(url, data=data, headers=headers, method="POST")
     with urllib.request.urlopen(req) as resp:
         body = resp.read()
     return json.loads(body) if body else {}
 
 
 def iter_sse(url: str):
-    with urllib.request.urlopen(url) as resp:
+    with urllib.request.urlopen(urllib.request.Request(url, headers=auth_headers())) as resp:
         for raw in resp:
             line = raw.decode().strip()
             if line.startswith("data: "):
@@ -61,10 +80,11 @@ def wait_for_session_exit(session_id: str, timeout: float = 10):
         time.sleep(0.1)
 
 
-def find_report(session_id: str, started_at: float) -> Path | None:
-    with open("config.yaml") as f:
-        storage = yaml.safe_load(f).get("storage", {})
-    reports_dir = Path(storage.get("working_dir", ".agentflow")) / session_id / "reports"
+def find_report(session_id: str, started_at: float, report_dir: str | None = None) -> Path | None:
+    if report_dir is None:
+        with open("config.yaml") as f:
+            report_dir = yaml.safe_load(f).get("storage", {}).get("working_dir", ".agentflow")
+    reports_dir = Path(report_dir) / session_id / "reports"
     reports = [p for p in reports_dir.glob("*.md") if p.stat().st_mtime >= started_at]
     return max(reports, key=lambda p: p.stat().st_mtime) if reports else None
 
@@ -75,6 +95,11 @@ def main():
     parser.add_argument("--query", default=QUERY, help="initial user query")
     parser.add_argument("--resume", help="session_id of a previous run to resume")
     parser.add_argument("--answer", action="append", default=[], help="scripted HITL answer (repeatable)")
+    parser.add_argument(
+        "--report-dir",
+        help="local path of the server's session storage (default: storage.working_dir from config.yaml); "
+             "use it when the server's storage is not this checkout's",
+    )
     args = parser.parse_args()
 
     base_url = args.base_url.rstrip("/") if args.base_url else start_in_process_server()
@@ -109,7 +134,7 @@ def main():
 
     if not args.base_url:
         wait_for_session_exit(chat["session_id"])
-    report = find_report(chat["session_id"], started_at)
+    report = find_report(chat["session_id"], started_at, args.report_dir)
     print("\n" + "=" * 60)
     print(f"HITL clarifications asked: {clarifications}")
     print(f"Report file: {report.resolve() if report else 'NOT FOUND'}")
