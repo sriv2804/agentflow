@@ -6,6 +6,7 @@ Collection name: recall_{agent_name}
 from typing import List, Dict
 from datetime import datetime, timezone
 import asyncio
+import uuid
 import chromadb
 from src.core.storage import get_chromadb_path
 
@@ -23,8 +24,9 @@ class RecallStore:
     async def append(self, session_id: str, turn_id: int, role: str, content: str):
         timestamp = datetime.now(timezone.utc).isoformat()
         await asyncio.to_thread(
-            self.collection.upsert,
-            ids=[f"{session_id}_{turn_id}"],
+            self.collection.add,
+            # unique per entry: turn_id restarts when a session is resumed, so it can't be the id
+            ids=[f"{session_id}_{uuid.uuid4().hex}"],
             documents=[f"{role.upper()}: {content}"],
             metadatas=[{
                 "session_id": session_id,
@@ -58,7 +60,7 @@ class RecallStore:
     async def get_recent(self, n: int = 10) -> List[Dict]:
         existing = await asyncio.to_thread(self.collection.get)
         entries = list(zip(existing["ids"], existing["documents"], existing["metadatas"]))
-        entries.sort(key=lambda e: e[2]["timestamp"])
+        entries.sort(key=lambda e: (e[2]["timestamp"], e[2].get("turn_id", 0)))
         recent = entries[-n:]
         return [
             {

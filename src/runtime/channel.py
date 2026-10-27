@@ -19,11 +19,32 @@ class Turn(Enum):
     CLIENT = "client"
 
 
+CLOSE_REASONS = ("done", "error", "shutdown")
+
+# put on client_in_q by close() to wake a reader blocked on an empty queue
+CLOSE_SENTINEL = object()
+
+
 class ChannelClosed(Exception):
     """
-    Raised when attempting to use a channel whose target event loop
-    is not running or has not been registered.
+    Raised when the channel is closed (reason: done | error | shutdown), or when
+    attempting to use a channel whose target event loop is not running or has
+    not been registered.
+
+    ChannelClosed("some text") keeps working: text that isn't a known reason
+    becomes the message, with reason "error".
     """
+
+    def __init__(self, reason: str = "error", message: Optional[str] = None):
+        if reason not in CLOSE_REASONS:
+            reason, message = "error", reason if message is None else f"{reason}: {message}"
+        self.reason = reason
+        self.message = message
+        super().__init__(f"channel closed ({reason})" + (f": {message}" if message else ""))
+
+
+class TurnViolation(Exception):
+    """Raised when a side sends while it is not its turn."""
 
 
 class AsyncChannel:
@@ -64,6 +85,44 @@ class AsyncChannel:
 
         self.client_loop: Optional[asyncio.AbstractEventLoop] = None
         self.agent_loop: Optional[asyncio.AbstractEventLoop] = None
+
+        # closed state is owned by the client loop (set in _close_local)
+        self.closed: bool = False
+        self.close_reason: Optional[str] = None
+        self.close_message: Optional[str] = None
+
+    # =======================
+    # Closing (any thread -> client loop)
+    # =======================
+
+    async def _close_local(self, reason: str, message: Optional[str]) -> None:
+        """Runs on the client loop. Idempotent."""
+        if self.closed:
+            return
+        self.closed = True
+        self.close_reason = reason
+        self.close_message = message
+        try:
+            self.client_in_q.put_nowait(CLOSE_SENTINEL)
+        except asyncio.QueueFull:
+            # the reader isn't blocked on an empty queue: it drains the buffered
+            # messages, then receive_from_agent() sees the closed flag
+            pass
+
+    def close(self, reason: str, message: Optional[str] = None) -> None:
+        """
+        Closes the channel from any thread without blocking. Messages already
+        buffered are still delivered; after them the reader gets ChannelClosed.
+        No-op if the client loop is gone (nobody is left to read).
+        """
+        loop = self.client_loop
+        if loop is None or not loop.is_running():
+            return
+        try:
+            # fire and forget: the caller may be a done-callback that must not wait
+            asyncio.run_coroutine_threadsafe(self._close_local(reason, message), loop)
+        except RuntimeError:
+            pass  # loop closed between the check and the call
 
     async def _put_with_timeout(
         self,
@@ -110,6 +169,9 @@ class AsyncChannel:
             if self.turn != Turn.CLIENT or self.in_progress:
                 return False
             self.in_progress = True
+            # hand the turn over before the message lands: the agent may start
+            # sending as soon as it receives it, before this coroutine resumes
+            self.turn = Turn.AGENT
 
         try:
             fut = asyncio.run_coroutine_threadsafe(
@@ -119,11 +181,11 @@ class AsyncChannel:
             await asyncio.wrap_future(fut)
         except Exception:
             with self.turn_lock:
+                self.turn = Turn.CLIENT
                 self.in_progress = False
             raise
 
         with self.turn_lock:
-            self.turn = Turn.AGENT
             self.in_progress = False
 
         return True
@@ -133,14 +195,23 @@ class AsyncChannel:
         Receives a message sent by the agent to the client.
         Called by the server thread to drain client_in_q for SSE streaming.
         Blocks until a message is available.
+
+        Raises:
+            ChannelClosed: once the channel is closed and every buffered
+                message has been delivered.
         """
-        return await self.client_in_q.get()
+        if self.closed and self.client_in_q.empty():
+            raise ChannelClosed(self.close_reason, self.close_message)
+        msg = await self.client_in_q.get()
+        if msg is CLOSE_SENTINEL:
+            raise ChannelClosed(self.close_reason, self.close_message)
+        return msg
 
     # =======================
     # Agent -> Client (Thread 2 -> Thread 1)
     # =======================
 
-    async def send_to_client(self, msg: Dict, timeout: int = 5) -> bool:
+    async def send_to_client(self, msg: Dict, timeout: int = 5) -> None:
         """
         Sends a message from the agent (agent thread) to the client (server thread).
 
@@ -153,37 +224,40 @@ class AsyncChannel:
                          until the client responds. These two calls are an
                          atomic pair by convention.
 
-        Returns:
-            True if the message was delivered successfully.
-            False if it is not the agent's turn.
-
         Raises:
-            ChannelClosed: if the client event loop is not running.
-            TimeoutError: if the queue put times out.
+            ChannelClosed: if the channel is closed, the client event loop is
+                not running, or the client stops reading (queue full for
+                `timeout` seconds).
+            TurnViolation: if it is not the agent's turn.
         """
+        if self.closed:
+            raise ChannelClosed(self.close_reason, self.close_message)
         if not self.client_loop or not self.client_loop.is_running():
             raise ChannelClosed("Client loop is not running")
 
-        with self.turn_lock:
-            if self.turn != Turn.AGENT:
-                return False
-
         message_type = msg.get("message_type", "info")
 
-        try:
-            fut = asyncio.run_coroutine_threadsafe(
-                self._put_with_timeout(self.client_in_q, msg, timeout),
-                self.client_loop,
-            )
-            await asyncio.wrap_future(fut)
-        except Exception:
-            return False
-
-        if message_type == "response":
-            with self.turn_lock:
+        with self.turn_lock:
+            if self.turn != Turn.AGENT:
+                raise TurnViolation(f"send_to_client while it is the {self.turn.value}'s turn")
+            if message_type == "response":
+                # hand the turn over before the message lands: the client may
+                # answer as soon as it reads it, before this coroutine resumes
                 self.turn = Turn.CLIENT
 
-        return True
+        fut = asyncio.run_coroutine_threadsafe(
+            self._put_with_timeout(self.client_in_q, msg, timeout),
+            self.client_loop,
+        )
+        try:
+            await asyncio.wrap_future(fut)
+        except BaseException as e:
+            if message_type == "response":
+                with self.turn_lock:
+                    self.turn = Turn.AGENT
+            if isinstance(e, TimeoutError):
+                raise ChannelClosed("error", f"client not reading: queue full for {timeout}s") from e
+            raise
 
     async def receive_from_client(self) -> Any:
         """

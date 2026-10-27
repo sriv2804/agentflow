@@ -21,8 +21,9 @@ import yaml
 from colorama import Fore, Style, just_fix_windows_console
 from dotenv import load_dotenv
 
-from src.runtime.channel import AsyncChannel
+from src.runtime.channel import AsyncChannel, ChannelClosed
 from src.runtime.run_context import AgentRunContext, run_on_channel
+from src.runtime.scheduler import close_channel_when_done
 
 AGENT_COLORS = {
     "orchestrator": Fore.CYAN,
@@ -123,6 +124,11 @@ async def run_tui(query: str | None, flow_name: str, config: dict, session_id: s
     finished = threading.Event()
 
     async def run_session():
+        # same as the server: the task's done-callback closes the channel, so the
+        # read loop below always ends (done, error or shutdown)
+        asyncio.current_task().add_done_callback(
+            lambda t: close_channel_when_done(t, channel, session_id)
+        )
         try:
             await run_on_channel(run_ctx)  # saves conversation history as it exits
         finally:
@@ -133,7 +139,7 @@ async def run_tui(query: str | None, flow_name: str, config: dict, session_id: s
     print(f"{Style.BRIGHT}{'Resumed' if resumed else 'Started'} session{Style.RESET_ALL} {session_id}  "
           f"{Style.DIM}(flow: {flow_name}){Style.RESET_ALL}")
     try:
-        return await converse(channel, query, config, session_id, asyncio.wrap_future(run_future))
+        return await converse(channel, query, config, session_id)
     finally:
         if not run_future.done():
             run_future.cancel()  # Ctrl+C / stdin closed: cancel so the session still saves
@@ -143,8 +149,7 @@ async def run_tui(query: str | None, flow_name: str, config: dict, session_id: s
                   f"{Style.DIM}(resume with --resume {session_id}){Style.RESET_ALL}")
 
 
-async def converse(channel: AsyncChannel, query: str | None, config: dict, session_id: str,
-                   flow_done: asyncio.Future) -> int:
+async def converse(channel: AsyncChannel, query: str | None, config: dict, session_id: str) -> int:
     if query:
         print(f"{USER_STYLE}> {query}{Style.RESET_ALL}\n", flush=True)
     else:
@@ -154,18 +159,16 @@ async def converse(channel: AsyncChannel, query: str | None, config: dict, sessi
     await channel.send_to_agent(query)
 
     while True:
-        receive = asyncio.ensure_future(channel.receive_from_agent())
-        done, _ = await asyncio.wait({receive, flow_done}, return_when=asyncio.FIRST_COMPLETED)
-
-        if receive not in done:
-            # the flow ended without sending "done" — surface why instead of hanging
-            receive.cancel()
-            error = flow_done.exception()
-            print(f"{Fore.RED}[error] flow stopped without a final answer"
-                  f"{f': {error!r}' if error else ''}{Style.RESET_ALL}")
+        try:
+            msg = await channel.receive_from_agent()
+        except ChannelClosed as closed:
+            if closed.reason == "done":
+                print(f"\n{Style.BRIGHT}[done]{Style.RESET_ALL} {closed.message or 'session ended'}")
+                return 0
+            label = "interrupted" if closed.reason == "shutdown" else "error"
+            print(f"{Fore.RED}[{label}] {closed.message or 'flow stopped without a final answer'}{Style.RESET_ALL}")
             return 1
 
-        msg = receive.result()
         msg_type = msg.get("message_type", "info")
         agent = msg.get("agent", "agent")
         content = str(msg.get("content", ""))
@@ -179,8 +182,7 @@ async def converse(channel: AsyncChannel, query: str | None, config: dict, sessi
             report = find_report(config, session_id, started_at)
             if report:
                 print(f"{Style.BRIGHT}Report saved to:{Style.RESET_ALL} {report}")
-            # let the flow return normally so its history save completes
-            await asyncio.wait({flow_done}, timeout=SHUTDOWN_TIMEOUT)
+            # run_tui waits for the flow to return so its history save completes
             return 0
 
 

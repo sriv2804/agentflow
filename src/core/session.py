@@ -13,6 +13,8 @@ class AgentContext:
     data : Dict[str, Any] = field(default_factory=dict)
     memory_manager : Optional[MemoryManager] = None
     tool_manager : Optional[ToolManager] = None
+    # recall store turn index for this agent in this session; kept across execute() calls
+    recall_turn : int = 0
     
     def set_memory_manager(self, memory_manager: MemoryManager) -> None:
         self.memory_manager = memory_manager

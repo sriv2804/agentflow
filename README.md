@@ -51,7 +51,7 @@ Session id: 81e27857-…  (resume with --resume 81e27857-…)
 
 A run takes roughly 10–15 minutes on local hardware with a ~26B model. Continue the conversation later with `python -m src.tui.tui --resume <session_id>`.
 
-To run the same flow behind HTTP/SSE instead, start the server with `uvicorn src.sse_server.app:app --port 8000` (see [Reference](#reference)).
+To run the same flow behind HTTP/SSE instead, start the server with `python -m src.sse_server` (see [Reference](#reference)).
 
 ---
 
@@ -173,7 +173,7 @@ Session id: 3748c72e-…  (resume with --resume 3748c72e-…)
 
 ## Session resumption
 
-Every chat gets its own storage directory keyed by its session ID (a UUID): `.agentflow/<session_id>/`. When a session ends gracefully — the flow finishes, errors, or is cancelled (including Ctrl+C in the TUI) — each agent's conversation history is written to that directory. Resuming the session reloads it, together with the session's skills, facts and working memory, so the agents pick up where they left off.
+Every chat gets its own storage directory keyed by its session ID (a UUID): `.agentflow/<session_id>/`. Each agent's conversation history is written to that directory after every completed step or handoff, before the session pauses for a human answer, and once more when the session ends (the flow finishes, errors, or is cancelled, including Ctrl+C in the TUI and a server shutdown). `session_status.json` records how it ended: `completed`, `failed` or `interrupted`. Resuming the session reloads it, together with the session's skills, facts and working memory, so the agents pick up where they left off.
 
 ```bash
 # TUI
@@ -189,7 +189,7 @@ curl -X POST localhost:8000/chats -H 'Content-Type: application/json' \
 In practice, a resumed session reuses context from earlier turns: in the demo below, a resumed session answered "now compare X vs Y with the same criteria" without re-asking the user, and followed the skill saved earlier in the same session.
 
 Limitations:
-- History is saved on graceful end only; a crash or a killed process loses the unsaved history.
+- A crash or a killed process (`kill -9`) loses at most the current, unfinished step.
 - Only the last `max_short_term` (20) messages per agent are kept, so long sessions remember recent exchanges, not everything.
 - Skills, facts and working memory are per session: a new session starts empty.
 
@@ -456,6 +456,7 @@ Environment variables (also read from `.env`) override `config.yaml`:
 | `AGENTFLOW_MODEL_BASE_URL` | `llm.base_url` |
 | `AGENTFLOW_API_KEY` | API key for the `openai` backend (checked before `api_key_env`) |
 | `AGENTFLOW_LOG_DIR` | directory for prompt logs (default `logs/`) |
+| `AGENTFLOW_SHUTDOWN_TIMEOUT` | seconds the server waits on SIGTERM/SIGINT for active sessions to save before exiting (default `20`) |
 | `AGENTFLOW_AUTH_TOKEN` | optional: when set, every route except `/healthz` requires `Authorization: Bearer <token>`; unset means no auth |
 
 The server checks the resulting LLM settings at startup and exits with a clear message if something is missing.
@@ -463,8 +464,13 @@ The server checks the resulting LLM settings at startup and exits with a clear m
 ### Running the server
 
 ```bash
-uvicorn src.sse_server.app:app --host 0.0.0.0 --port 8000
+python -m src.sse_server                      # host/port from config.yaml (server.host, server.port)
+python -m src.sse_server --host 0.0.0.0 --port 8000
 ```
+
+On SIGTERM or Ctrl+C the server shuts down gracefully: new chats get `503` (with `Retry-After`), every active session is cancelled and saved as `interrupted`, and each open stream ends with a `shutdown` event. Interrupted sessions can be resumed with `POST /chats {"session_id": "<id>"}`. Running `uvicorn src.sse_server.app:app` directly still works, but without this drain.
+
+Every SSE stream ends with exactly one final event: `done` (the flow finished), `error` (the flow failed; the content names the exception type only) or `shutdown` (the session was cancelled).
 
 ### API
 

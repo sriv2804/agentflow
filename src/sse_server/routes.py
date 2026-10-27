@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import os
 import uuid
 from pathlib import Path
@@ -9,6 +10,16 @@ from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel
 from src.sse_server.app import app, agent_manager, session_manager, config
 from src.runtime.run_context import AgentRunContext
+from src.runtime.channel import ChannelClosed
+
+logger = logging.getLogger("agentflow.server")
+
+# default text of the final SSE event when the channel closes without a message
+CLOSE_TEXT = {
+    "done": "Session ended.",
+    "error": "The flow stopped because of an error.",
+    "shutdown": "The server is shutting down; the session was saved and can be resumed.",
+}
 
 
 class UserInput(BaseModel):
@@ -41,6 +52,12 @@ async def healthz():
 
 @app.post("/chats")
 async def create_chat(request: Request, payload: Optional[CreateChat] = None):
+    if request.app.state.shutting_down:
+        raise HTTPException(
+            status_code=503,
+            detail="Server is shutting down",
+            headers={"Retry-After": "30"},
+        )
     resume_id = payload.session_id if payload else None
     if resume_id:
         resume_id = _resumable_session_id(resume_id)
@@ -74,23 +91,37 @@ async def stream_output(session_id: str):
     async def event_generator():
         try:
             while True:
-                agent_msg = await channel.receive_from_agent()
-                message_type = agent_msg.get("message_type", "info")
+                try:
+                    agent_msg = await channel.receive_from_agent()
+                except ChannelClosed as closed:
+                    # the flow ended without (another) final message: done, error or shutdown
+                    yield _sse({
+                        "message_type": closed.reason,
+                        "content": closed.message or CLOSE_TEXT[closed.reason],
+                    })
+                    session_manager.delete_session(session_id)
+                    return
                 if isinstance(agent_msg, dict):
-                    payload = json.dumps(agent_msg)
+                    message_type = agent_msg.get("message_type", "info")
+                    yield _sse(agent_msg)
                 else:
-                    payload = json.dumps({"message": str(agent_msg)})
-                yield f"data: {payload}\n\n"
+                    message_type = "info"
+                    yield _sse({"message": str(agent_msg)})
                 if message_type == "done":
                     session_manager.delete_session(session_id)
                     return
         except asyncio.CancelledError:
-            print(f"Stream connection closed for {session_id}")
+            # client went away mid-stream: the flow keeps running (no idle-session cleanup yet)
+            logger.info("stream connection closed for %s", session_id)
 
     return StreamingResponse(
         content=event_generator(),
         media_type="text/event-stream"
     )
+
+
+def _sse(payload: dict) -> str:
+    return f"data: {json.dumps(payload)}\n\n"
 
 
 @app.post("/chats/{session_id}/input")

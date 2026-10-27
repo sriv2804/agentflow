@@ -1,10 +1,34 @@
 import asyncio
+import logging
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, Optional, Tuple
 
 from src.runtime.channel import AsyncChannel
 from src.runtime.run_context import run_on_channel
+
+logger = logging.getLogger("agentflow.runtime")
+
+
+def close_channel_when_done(task: asyncio.Task, channel: AsyncChannel, session_id: str) -> None:
+    """
+    Done-callback for a session task: close the channel so the client's stream
+    always ends. Plain function on purpose (runs on the agent loop): no await, no I/O.
+    """
+    if task.cancelled():
+        channel.close("shutdown")
+        return
+    exc = task.exception()
+    if exc is not None:
+        logger.error(
+            "session %s: flow failed", session_id,
+            exc_info=(type(exc), exc, exc.__traceback__),
+        )
+        # the client only gets the exception type: messages can carry prompts or provider details
+        channel.close("error", f"{type(exc).__name__}: flow failed")
+    else:
+        channel.close("done")
+
 
 class AsyncAgentManager:
     """
@@ -42,6 +66,9 @@ class AsyncAgentManager:
         task = asyncio.create_task(run_on_channel(run_ctx))
         self.registry[run_ctx.session_id] = (run_ctx.channel, task)
         task.add_done_callback(lambda t: self.registry.pop(run_ctx.session_id, None))
+        task.add_done_callback(
+            lambda t: close_channel_when_done(t, run_ctx.channel, run_ctx.session_id)
+        )
     
     def submit(self, run_ctx):
         if not self._loop or not self._loop.is_running():

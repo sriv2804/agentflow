@@ -33,6 +33,7 @@ async def lifespan(app: FastAPI):
     yield
 
 app = FastAPI(lifespan=lifespan)
+app.state.shutting_down = False  # set by AgentflowServer on SIGTERM/SIGINT
 
 
 @app.middleware("http")
