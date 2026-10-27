@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional, Tuple, Literal, List, TYPE_CHECKING
 from pathlib import Path
 import json
 import os
+import threading
 
 
 class ScratchPad:
@@ -104,6 +105,9 @@ class MemoryManager:
         self.conversation_history : List[Dict] = []
         #where conversation_history is saved when the session ends (see run_on_channel)
         self.history_path: Optional[Path] = history_path
+        # saves share one .tmp file; a save cancelled mid-await keeps running in its
+        # thread, so the next save of the same history must wait for it
+        self._save_lock = threading.Lock()
         self.max_short_term = max_short_term
         self.scratchpad = ScratchPad(max_short_term)
         self.working_memory: str = working_memory   # persistent index of long-term stores
@@ -143,9 +147,10 @@ class MemoryManager:
         #blocking file I/O — async callers should run it via asyncio.to_thread
         path = Path(path)
         tmp_path = path.with_suffix(".tmp")
-        with open(tmp_path, "w") as f:
-            json.dump(self.conversation_history, f)
-        os.replace(tmp_path, path)
+        with self._save_lock:
+            with open(tmp_path, "w") as f:
+                json.dump(self.conversation_history, f)
+            os.replace(tmp_path, path)
 
     def load_history(self, path: Path):
         path = Path(path)

@@ -2,6 +2,7 @@ from __future__ import annotations
 from typing import Any, Dict, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass
 from pathlib import Path
+import asyncio
 import json
 import os
 import re
@@ -176,14 +177,7 @@ class Agent:
         scratchpad = agent_memory_manager.scratchpad
         agent_memory_manager.append_msg(role=callee_agent, content=input_data)
         self._handle_memory_pressure(agent_memory_manager, scratchpad)
-        turn_counter = 0
-        await self.recall_store.append(
-            session_id=session_context.session_id,
-            turn_id=turn_counter,
-            role=callee_agent,
-            content=input_data
-        )
-        turn_counter += 1
+        await self._recall(session_context, agent_context, role=callee_agent, content=input_data)
         tool_manager = self.tool_manager
         tool_manager.set_toolctx(
             self.skill_store,
@@ -232,18 +226,16 @@ class Agent:
                                 'content': query
                             }
                         )
+                        # the session may sit here for a long time: persist before pausing
+                        await self._save_history(agent_memory_manager)
                         response_from_client = await channel.receive_from_client()
                         agent_memory_manager.append_msg(role='user', content=response_from_client)
-                        await self.recall_store.append(
-                            session_id=session_context.session_id,
-                            turn_id=turn_counter,
-                            role="user",
-                            content=response_from_client
-                        )
-                        turn_counter += 1
+                        await self._save_history(agent_memory_manager)
+                        await self._recall(session_context, agent_context, role="user", content=response_from_client)
                         self._handle_memory_pressure(agent_memory_manager, scratchpad)
                         runtime_state.needs_clarification = False
                 else:
+                    await self._save_history(agent_memory_manager)
                     return Edge(
                         callee=self.agent_name,
                         call_to = self.resolver,
@@ -299,13 +291,7 @@ class Agent:
                     **parsed_llm_output['runtime_state']
                 )
                 summary = parsed_llm_output.get("summary", "")
-                await self.recall_store.append(
-                    session_id=session_context.session_id,
-                    turn_id=turn_counter,
-                    role="agent",
-                    content=response_from_llm
-                )
-                turn_counter += 1
+                await self._recall(session_context, agent_context, role="agent", content=response_from_llm)
                 scratchpad.append_trail(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
                     "message_type": "info",
@@ -313,6 +299,7 @@ class Agent:
                     "content": summary
                 })
         if runtime_state.irrecoverable_error:
+            await self._save_history(agent_memory_manager)
             await channel.send_to_client({
                 "message_type":  "done",
                 "agent": self.agent_name,
@@ -335,6 +322,7 @@ class Agent:
         )
         scratchpad.reset_trail()
         agent_memory_manager.update_summary()
+        await self._save_history(agent_memory_manager)
         if runtime_state.yield_action == "end":
             await channel.send_to_client({
                 "message_type": "done",
@@ -347,6 +335,21 @@ class Agent:
             data = runtime_state.yield_output
         )
     
+    async def _save_history(self, memory_manager: MemoryManager) -> None:
+        """Persist this agent's conversation history (per turn, not only at session end)."""
+        if memory_manager.history_path:
+            await asyncio.to_thread(memory_manager.save_history, memory_manager.history_path)
+
+    async def _recall(self, session_context: SessionContext, agent_context: AgentContext,
+                      role: str, content: Any) -> None:
+        await self.recall_store.append(
+            session_id=session_context.session_id,
+            turn_id=agent_context.recall_turn,
+            role=role,
+            content=content
+        )
+        agent_context.recall_turn += 1
+
     def parse_llm_output(self, llm_response: str, tool_manager: ToolManager) -> dict:
         """
         Parses the LLM's JSON response into a RuntimeState-compatible dict.
