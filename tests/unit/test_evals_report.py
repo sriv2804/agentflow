@@ -123,6 +123,9 @@ def test_failure_reasons_are_counted_once_per_trial(tmp_path):
     assert top[("required_failed", "state_check:fx.status")]["trials"] == 3      # refund t2, ask t1, ask t3
     assert top[("not_completed", None)]["trials"] == 1
     assert len(s["failure_reasons"]) == 3 and s["failure_reasons"][0]["trials"] == 3
+    # ties: the direct cause ranks before below_threshold
+    assert [(x["reason"], x["trials"]) for x in s["failure_reasons"]] == [
+        ("required_failed", 3), ("below_threshold", 3), ("not_completed", 1)]
     assert {"task": "refund", "trial": 2} in top[("required_failed", "state_check:fx.status")]["refs"]
 
 

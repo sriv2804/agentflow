@@ -22,6 +22,7 @@ from typing import Any, Dict, List, Optional
 
 FACT_VERDICTS = ("present", "absent", "contradicted", "undetermined")
 TOP_REASONS = 3
+REASON_ORDER = {"not_completed": 0, "required_failed": 1, "contradiction": 2, "min_score": 3, "below_threshold": 4}
 
 
 def _read(path: Path) -> Optional[dict]:
@@ -86,7 +87,8 @@ def _ranked_reasons(trials: List[dict], limit: Optional[int]) -> List[dict]:
     for t in trials:
         for key in _failure_keys(t):          # once per trial
             counts[key].append(_ref(t))
-    ranked = sorted(counts.items(), key=lambda kv: (-len(kv[1]), kv[0][0], kv[0][1] or ""))
+    # most trials first; on a tie the more direct cause first (below_threshold mostly follows from the others)
+    ranked = sorted(counts.items(), key=lambda kv: (-len(kv[1]), REASON_ORDER.get(kv[0][0], 99), kv[0][0], kv[0][1] or ""))
     out = [{"reason": r, "grader_id": g, "trials": len(refs), "refs": refs} for (r, g), refs in ranked]
     return out[:limit] if limit else out
 
