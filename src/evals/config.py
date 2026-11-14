@@ -37,7 +37,8 @@ class ModelConfig(BaseModel):
 
     def describe(self) -> Dict[str, Any]:
         """For the manifest: never includes a key, only the env var's name."""
-        return {"backend": self.backend, "model_name": self.model_name, "base_url": self.base_url}
+        return {"backend": self.backend, "model_name": self.model_name, "base_url": self.base_url,
+                "api_key_env": self.api_key_env}
 
 
 class RunConfig(BaseModel):

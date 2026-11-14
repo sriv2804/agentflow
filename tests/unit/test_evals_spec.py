@@ -193,7 +193,8 @@ def test_run_config(tmp_path):
     cfg = load_run_config(str(path), concurrency=2)
     assert cfg.concurrency == 2 and cfg.infra_retry == 1 and cfg.metadata == {"label": "base"}
     assert cfg.user_sim_model() == cfg.judge_model()            # simulator defaults to the judge
-    assert cfg.judge_model().describe() == {"backend": "openai", "model_name": "j", "base_url": "http://x"}
+    assert cfg.judge_model().describe() == {"backend": "openai", "model_name": "j", "base_url": "http://x",
+                                            "api_key_env": "K"}   # the variable's name, never its value
     path.write_text("concurrency: 0\n")
     with pytest.raises(ConfigError):
         load_run_config(str(path))

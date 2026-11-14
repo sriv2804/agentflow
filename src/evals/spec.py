@@ -5,6 +5,7 @@ Suite spec: YAML, validated at load time, before any LLM call.
     flow: <registered flow name>
     base_dir: <dir>          # optional: where setup/check modules and context paths
                              # resolve; relative to the suite file, default its directory
+    grader_modules: [<module>]   # optional: modules that register custom graders
     defaults: {trials, pass_threshold, limits: {timeout_s, max_llm_calls},
                user: {on_exhausted, max_clarifications}, teardown}
     dimensions: {<name>: {description, scale: {0: str, 1: str, 2: str}, needs: [<context key>]}}
@@ -37,11 +38,7 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 NAME_RE = r"^[A-Za-z0-9][A-Za-z0-9_\-]*$"   # ids end up in paths and session ids
 CONTEXT_FILE_SUFFIXES = (".md", ".txt", ".json", ".yaml", ".yml", ".csv", ".html")
 
-# grader types known to the spec; PR 3 adds the implementations and a registry for custom ones
-BUILTIN_GRADER_TYPES = {
-    "state_check", "tool_called", "tool_not_called", "handoff", "clarification_asked",
-    "text_match", "max_steps", "key_facts", "llm_rubric",
-}
+# grader types are looked up in src.evals.graders.GRADER_REGISTRY (built-ins and custom ones)
 GRADERS_NAMING_A_TOOL = {"tool_called", "tool_not_called"}
 GRADERS_WITH_CHECK = {"state_check", "tool_called"}
 
@@ -146,6 +143,7 @@ class SuiteSpec(_Strict):
     suite: str = Field(pattern=NAME_RE)
     flow: str
     base_dir: Optional[str] = None
+    grader_modules: List[str] = Field(default_factory=list)
     defaults: Defaults = Field(default_factory=Defaults)
     dimensions: Dict[str, Dimension] = Field(default_factory=dict)
     tasks: List[TaskSpec] = Field(min_length=1)
@@ -200,6 +198,12 @@ class Suite:
 
 
 # ---------- helpers ----------
+
+def load_module(dotted: str, base_dir: Path):
+    """A module by dotted name: a file under base_dir first, else a normal import."""
+    module = _load_module_from_dir(dotted, base_dir)
+    return module if module is not None else importlib.import_module(dotted)
+
 
 def load_callable(dotted: str, base_dir: Path) -> Callable:
     """
@@ -317,6 +321,13 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
     base_dir = (path.parent / spec.base_dir).resolve() if spec.base_dir else path.parent.resolve()
     errors: List[str] = []
 
+    from src.evals.graders import GRADER_REGISTRY, build_grader   # registers the built-in graders
+    for module in spec.grader_modules:
+        try:
+            load_module(module, base_dir)
+        except Exception as e:
+            errors.append(f"grader_modules: {module!r} cannot be imported: {type(e).__name__}: {e}")
+
     # flow and its tools
     tools: Optional[set] = None
     if build_flow is None:
@@ -371,13 +382,16 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
         # graders
         for gi, g in enumerate(t.graders):
             glabel = f"{label}: graders[{gi}] ({g.type})"
-            if g.type not in BUILTIN_GRADER_TYPES and not _is_custom_grader(g.type):
-                errors.append(f"{glabel}: unknown grader type")
+            if g.type not in GRADER_REGISTRY:
+                errors.append(f"{glabel}: unknown grader type (known: {sorted(GRADER_REGISTRY)})")
+            else:
+                try:
+                    build_grader(g)
+                except ValueError as e:
+                    errors.append(f"{glabel}: {e}")
             if g.type in GRADERS_NAMING_A_TOOL:
                 tool = g.opt("tool")
-                if not tool:
-                    errors.append(f"{glabel}: 'tool' is required")
-                elif tools is not None and tool not in tools:
+                if tool and tools is not None and tool not in tools:
                     errors.append(f"{glabel}: tool {tool!r} is not in flow {spec.flow!r} (tools: {sorted(tools)})")
             if g.type in GRADERS_WITH_CHECK and g.opt("check"):
                 try:
@@ -390,12 +404,8 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
                         errors.append(f"{glabel}: check {g.opt('check')!r} must take (session_dir)")
                     if g.type == "tool_called" and arity < 1:
                         errors.append(f"{glabel}: check {g.opt('check')!r} must take (call) or (call, session_dir)")
-            elif g.type == "state_check":
-                errors.append(f"{glabel}: 'check' is required")
             if g.type == "llm_rubric":
-                dims = g.opt("dimensions") or []
-                if not dims:
-                    errors.append(f"{glabel}: 'dimensions' is required")
+                dims = g.opt("dimensions") if isinstance(g.opt("dimensions"), list) else []
                 for dim in dims:
                     if dim not in spec.dimensions:
                         errors.append(f"{glabel}: dimension {dim!r} is not declared in the suite")
@@ -429,7 +439,3 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
                  hash=hashlib.sha256(raw_bytes).hexdigest(), dimensions=spec.dimensions,
                  tasks=tasks, raw=raw)
 
-
-def _is_custom_grader(type_name: str) -> bool:
-    """Custom graders arrive with the grader registry (PR 3)."""
-    return False
