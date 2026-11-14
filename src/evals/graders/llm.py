@@ -1,7 +1,8 @@
 """
 LLM graders, judged by the run config's judge model at temperature 0.
 
-The judge replies with JSON, gives its reasoning before each verdict, and may
+The judge replies with JSON only, writes a short comment (at most 2-3 sentences)
+before each verdict or score, and may
 answer "undetermined" (key_facts) or score null (llm_rubric) when it cannot tell.
 Unusable output is retried twice with the parse error fed back; after that the
 grader's status is grader_error, which is never an agent failure.
@@ -118,6 +119,11 @@ def _evidence(value: Any, valid: set) -> List[int]:
     return [int(v) for v in value if isinstance(v, (int, float)) and not isinstance(v, bool) and int(v) in valid]
 
 
+def _comment(item: Dict[str, Any]) -> str:
+    """The judge's comment; "reasoning" is accepted too, since models sometimes rename the field."""
+    return str(item.get("comment") or item.get("reasoning") or "")
+
+
 def one_line(text: Any, limit: int = 200) -> str:
     line = " ".join(str(text or "").split())
     return line if len(line) <= limit else line[:limit - 1] + "…"
@@ -142,8 +148,9 @@ For each key fact, decide whether the agent's messages state or establish it:
 - "contradicted": the conversation states something incompatible with the fact
 - "undetermined": you cannot tell from the conversation
 
-Reason about each fact before giving its verdict. Reply with ONLY a JSON object, facts in the given order:
-{{"facts": [{{"fact": "<the fact, copied>", "reasoning": "<one or two sentences>", "verdict": "present" | "absent" | "contradicted" | "undetermined", "evidence": [<event indices that support the verdict>]}}]}}"""
+For each fact, write a short comment (at most 2-3 sentences) before its verdict.
+Reply with only this JSON object, facts in the given order, and no text before or after it:
+{{"facts": [{{"fact": "<the fact, copied>", "comment": "<at most 2-3 sentences>", "verdict": "present" | "absent" | "contradicted" | "undetermined", "evidence": [<event indices that support the verdict>]}}]}}"""
 
 
 @register_grader("key_facts", llm=True)
@@ -174,8 +181,8 @@ class KeyFacts(Grader):
                 verdict = str(item.get("verdict", "")).strip().lower()
                 if verdict not in FACT_VERDICTS:
                     raise ValueError(f"verdict {item.get('verdict')!r} is not one of {list(FACT_VERDICTS)}")
-                out.append({"fact": fact, "verdict": verdict, "reasoning": str(item.get("reasoning", "")),
-                            "reason": one_line(item.get("reasoning")),
+                out.append({"fact": fact, "verdict": verdict, "comment": _comment(item),
+                            "reason": one_line(_comment(item)),
                             "evidence": _evidence(item.get("evidence"), valid)})
             return out
 
@@ -209,9 +216,9 @@ Transcript (each line starts with its event index; tool calls show their outputs
 Dimensions:
 {dimensions}
 
-For each dimension, reason about the transcript first, then give a score from that dimension's scale.
-If the transcript does not let you judge a dimension, give "score": null (unable to determine).
-Reply with ONLY a JSON object:
+For each dimension, write a short comment (at most 2-3 sentences) first, then give a score from that
+dimension's scale. If the transcript does not let you judge a dimension, give "score": null (unable to determine).
+Reply with only this JSON object, and no text before or after it:
 {{"dimensions": {{{example}}}}}"""
 
 
@@ -247,7 +254,7 @@ class LLMRubric(Grader):
             dimensions="\n".join(
                 f"- {name}: {d.description}\n  scale: " + "; ".join(f"{k} = {v}" for k, v in sorted(d.scale.items()))
                 for name, d in dims.items()),
-            example=", ".join(f'"{name}": {{"reasoning": "...", "score": <{"|".join(str(k) for k in sorted(d.scale))}'
+            example=", ".join(f'"{name}": {{"comment": "<at most 2-3 sentences>", "score": <{"|".join(str(k) for k in sorted(d.scale))}'
                               f' or null>, "evidence": [<event indices>]}}' for name, d in dims.items()),
         )
 
@@ -267,8 +274,8 @@ class LLMRubric(Grader):
                     raise ValueError(f"{name}: score {item.get('score')!r} is not on the scale {sorted(d.scale)}")
                 low, high = min(d.scale), max(d.scale)
                 normalised = None if score is None else (1.0 if high == low else (score - low) / (high - low))
-                out[name] = {"score": score, "normalised": normalised, "reasoning": str(item.get("reasoning", "")),
-                             "reason": one_line(item.get("reasoning")), "scale": {str(k): v for k, v in d.scale.items()},
+                out[name] = {"score": score, "normalised": normalised, "comment": _comment(item),
+                             "reason": one_line(_comment(item)), "scale": {str(k): v for k, v in d.scale.items()},
                              "evidence": _evidence(item.get("evidence"), valid)}
             return out
 

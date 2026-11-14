@@ -209,6 +209,8 @@ def test_key_facts_parses_fenced_json_and_scores():
     assert r.evidence == [7]                              # 99 is not an event index: dropped
     prompt = judge.prompts[0]
     assert "1. a refund was initiated" in prompt and "refund issued" in prompt and "[5] agent asks: Which order?" in prompt
+    assert "at most 2-3 sentences" in prompt and '"comment"' in prompt and "no text before or after" in prompt
+    assert r.details["facts"][0]["comment"] == "because 0"   # "reasoning" is accepted as the comment too
     assert (c.judge_stats.calls, c.judge_stats.tokens_in, c.judge_stats.parse_retries) == (1, 100, 0)
 
 
@@ -257,6 +259,7 @@ def test_llm_rubric_normalises_and_sends_only_needed_context():
     assert dims["politeness"]["normalised"] == 0.5 and dims["politeness"]["reason"] == "politeness reasoning second line"
     prompt = judge.prompts[0]
     assert "POLICY-TEXT" in prompt and "OTHER-TEXT" not in prompt
+    assert "at most 2-3 sentences" in prompt and '"politeness": {"comment"' in prompt
     assert "calls tool initiate_refund" in prompt and "ERROR: limit exceeded" in prompt
 
 
