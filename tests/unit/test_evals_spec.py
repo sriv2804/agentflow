@@ -206,3 +206,29 @@ def test_cli_reports_spec_errors_before_running(tmp_path, capsys):
     err = capsys.readouterr().err
     assert "unknown flow" in err and "scripted but no replies" in err
     assert main(["run", str(path), "--trials", "0"]) == 2
+
+
+def test_teardown_default_override_and_import_errors(tmp_path):
+    base = BASE.replace("tasks:\n", "defaults: {teardown: fx.seed}\ntasks:\n")
+    suite = load_suite(write_suite(tmp_path, """
+- {id: a, prompt: hi, user: {replies: []}}
+- {id: b, prompt: hi, user: {replies: []}, teardown: fx.status}
+""", base), build_flow=BUILD)
+    assert [t.teardown for t in suite.tasks] == ["fx.seed", "fx.status"]
+    errs = errors_of(write_suite(tmp_path, "- {id: a, prompt: hi, user: {replies: []}, teardown: fx.gone}\n"))
+    assert any("teardown 'fx.gone' cannot be imported" in e for e in errs)
+
+
+def test_check_functions_must_take_the_right_arguments(tmp_path):
+    (tmp_path / "noargs.py").write_text("def fn():\n    return {}\n")
+    path = write_suite(tmp_path, """
+- id: a
+  prompt: hi
+  user: {replies: []}
+  graders:
+    - {type: state_check, check: noargs.fn, expect: {}}
+    - {type: tool_called, tool: initiate_refund, check: noargs.fn}
+""")
+    errs = errors_of(path)
+    assert any("must take (session_dir)" in e for e in errs)
+    assert any("must take (call) or (call, session_dir)" in e for e in errs)

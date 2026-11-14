@@ -6,10 +6,15 @@ Suite spec: YAML, validated at load time, before any LLM call.
     base_dir: <dir>          # optional: where setup/check modules and context paths
                              # resolve; relative to the suite file, default its directory
     defaults: {trials, pass_threshold, limits: {timeout_s, max_llm_calls},
-               user: {on_exhausted, max_clarifications}}
+               user: {on_exhausted, max_clarifications}, teardown}
     dimensions: {<name>: {description, scale: {0: str, 1: str, 2: str}, needs: [<context key>]}}
-    tasks: [{id, setup, prompt, user, reference, graders, trials?, pass_threshold?,
-             limits?, ...}]
+    tasks: [{id, setup, teardown?, prompt, user, reference, graders, trials?,
+             pass_threshold?, limits?, ...}]
+
+Trial lifecycle: setup(session_dir) -> client and agent interact -> every check
+function that reads the session dir runs (state_check functions, and tool_called
+predicates that take (call, session_dir)) and its result is stored -> teardown
+(session_dir). Grading later reads only the stored transcript and results.
 
 load_suite() returns a Suite with every task's effective settings resolved
 (task overrides on top of defaults) and raises SpecError listing every problem.
@@ -19,6 +24,7 @@ from __future__ import annotations
 import hashlib
 import importlib
 import importlib.util
+import inspect
 import re
 import sys
 from dataclasses import dataclass, field
@@ -69,6 +75,7 @@ class UserDefaults(_Strict):
 
 
 class Defaults(_Strict):
+    teardown: Optional[str] = None
     trials: int = Field(3, ge=1)
     pass_threshold: float = Field(0.7, ge=0, le=1)
     limits: Limits = Field(default_factory=Limits)
@@ -125,6 +132,7 @@ class GraderSpec(BaseModel):
 class TaskSpec(_Strict):
     id: str = Field(pattern=NAME_RE)
     setup: Optional[str] = None
+    teardown: Optional[str] = None
     prompt: str
     user: TaskUser = Field(default_factory=TaskUser)
     reference: Reference = Field(default_factory=Reference)
@@ -167,6 +175,7 @@ class Task:
     trials: int
     pass_threshold: float
     limits: Limits
+    teardown: Optional[str] = None
 
 
 @dataclass
@@ -227,6 +236,22 @@ def _load_module_from_dir(module_path: str, base_dir: Path):
                 raise
             return module
     return None
+
+
+def positional_arity(func: Callable) -> int:
+    """How many positional arguments func accepts (a large number for *args)."""
+    count = 0
+    for p in inspect.signature(func).parameters.values():
+        if p.kind == p.VAR_POSITIONAL:
+            return 99
+        if p.kind in (p.POSITIONAL_ONLY, p.POSITIONAL_OR_KEYWORD):
+            count += 1
+    return count
+
+
+def predicate_reads_state(func: Callable) -> bool:
+    """A tool_called predicate is check(call) or check(call, session_dir); the second reads state."""
+    return positional_arity(func) >= 2
 
 
 def resolve_context(value: str, base_dir: Path) -> str:
@@ -326,12 +351,14 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
         if u.mode == "llm" and (not u.persona or not u.facts):
             errors.append(f"{label}: user.mode is llm but persona and facts are both required")
 
-        # setup hook
-        if t.setup:
-            try:
-                load_callable(t.setup, base_dir)
-            except Exception as e:
-                errors.append(f"{label}: setup {t.setup!r} cannot be imported: {type(e).__name__}: {e}")
+        # setup and teardown hooks
+        teardown = t.teardown if t.teardown is not None else d.teardown
+        for hook_name, hook in (("setup", t.setup), ("teardown", teardown)):
+            if hook:
+                try:
+                    load_callable(hook, base_dir)
+                except Exception as e:
+                    errors.append(f"{label}: {hook_name} {hook!r} cannot be imported: {type(e).__name__}: {e}")
 
         # context
         context: Dict[str, str] = {}
@@ -354,9 +381,15 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
                     errors.append(f"{glabel}: tool {tool!r} is not in flow {spec.flow!r} (tools: {sorted(tools)})")
             if g.type in GRADERS_WITH_CHECK and g.opt("check"):
                 try:
-                    load_callable(g.opt("check"), base_dir)
+                    fn = load_callable(g.opt("check"), base_dir)
                 except Exception as e:
                     errors.append(f"{glabel}: check {g.opt('check')!r} cannot be imported: {type(e).__name__}: {e}")
+                else:
+                    arity = positional_arity(fn)
+                    if g.type == "state_check" and arity < 1:
+                        errors.append(f"{glabel}: check {g.opt('check')!r} must take (session_dir)")
+                    if g.type == "tool_called" and arity < 1:
+                        errors.append(f"{glabel}: check {g.opt('check')!r} must take (call) or (call, session_dir)")
             elif g.type == "state_check":
                 errors.append(f"{glabel}: 'check' is required")
             if g.type == "llm_rubric":
@@ -377,7 +410,7 @@ def load_suite(path: str | Path, build_flow: Optional[Callable[[str], Any]] = No
         limits = d.limits.model_copy(update={k: v for k, v in (t.limits.model_dump() if t.limits else {}).items()
                                              if v is not None})
         tasks.append(Task(
-            id=t.id, prompt=t.prompt, setup=t.setup,
+            id=t.id, prompt=t.prompt, setup=t.setup, teardown=teardown,
             user=UserSettings(
                 mode=u.mode, replies=list(u.replies or []), persona=u.persona, facts=list(u.facts or []),
                 on_exhausted=u.on_exhausted if u.on_exhausted is not None else d.user.on_exhausted,

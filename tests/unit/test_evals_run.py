@@ -11,7 +11,7 @@ import pytest
 from src.evals.client import UserDriver
 from src.evals.config import RunConfig
 from src.evals.runner import Runner
-from src.evals.spec import Limits, Reference, Suite, Task, UserSettings
+from src.evals.spec import GraderSpec, Limits, Reference, Suite, Task, UserSettings
 from src.flows.registry import FLOW_REGISTRY, register_flow
 from src.runtime.scheduler import AsyncAgentManager
 from src.tools.common import tool
@@ -110,11 +110,12 @@ def register(name, script_factory):
 
 
 def make_suite(flow, *, mode="scripted", replies=(), persona=None, facts=(), max_clar=4,
-               timeout_s=30.0, max_llm_calls=40, trials=1, setup=None, tmp_base=Path(".")):
-    task = Task(id="t", prompt="help me", setup=setup,
+               timeout_s=30.0, max_llm_calls=40, trials=1, setup=None, teardown=None, graders=(),
+               tmp_base=Path(".")):
+    task = Task(id="t", prompt="help me", setup=setup, teardown=teardown,
                 user=UserSettings(mode=mode, replies=list(replies), persona=persona, facts=list(facts),
                                   on_exhausted=ON_EXHAUSTED, max_clarifications=max_clar),
-                reference=Reference(), context={}, graders=[], trials=trials, pass_threshold=0.7,
+                reference=Reference(), context={}, graders=list(graders), trials=trials, pass_threshold=0.7,
                 limits=Limits(timeout_s=timeout_s, max_llm_calls=max_llm_calls))
     return Suite(name="s", flow=flow, path=Path("suite.yaml").resolve(), base_dir=tmp_base.resolve(),
                  hash="h" * 64, dimensions={}, tasks=[task])
@@ -299,3 +300,102 @@ def test_task_and_trial_filters(manager):
     assert sorted(p.name for p in (run_dir / "t").iterdir()) == ["t1"]
     with pytest.raises(ValueError):
         Runner(suite, RunConfig(), task_ids=["nope"], build_flow=lambda n: None)
+
+
+# ---------------- state checks before teardown ----------------
+
+FX = """
+from pathlib import Path
+
+def seed(session_dir):
+    (session_dir / "state.txt").write_text("open")
+
+def resolve(session_dir):
+    (session_dir / "state.txt").write_text("resolved")
+
+def status(session_dir):
+    return {"status": (session_dir / "state.txt").read_text()}
+
+def broken(session_dir):
+    raise KeyError("no ticket")
+
+def call_ok(call, session_dir):          # reads state: runs before teardown
+    return (session_dir / "state.txt").exists() and call["output"] == "pong"
+
+def args_only(call):                     # reads no state: left for grading
+    raise AssertionError("must not run in the run phase")
+
+def clear(session_dir):
+    (session_dir / "state.txt").unlink(missing_ok=True)
+    (session_dir / "torn_down").write_text("1")
+
+def bad_teardown(session_dir):
+    raise OSError("disk full")
+"""
+
+
+def two_pings_then_end(b):
+    return lambda n: j(summary="p", action="tool_call", tool_name="ping", args={}) if n <= 2 else end()
+
+
+GRADERS = [
+    GraderSpec(type="state_check", check="fx.status", expect={"status": "open"}, required=True),
+    GraderSpec(type="state_check", check="fx.status", expect={"status": "resolved"}),   # same fn: run once
+    GraderSpec(type="state_check", check="fx.broken", expect={}),
+    GraderSpec(type="tool_called", tool="ping", check="fx.call_ok"),
+    GraderSpec(type="tool_called", tool="ping", check="fx.args_only"),
+]
+
+
+def observations(run_dir):
+    return json.loads((run_dir / "t" / "t1" / "observations.json").read_text())
+
+
+def test_state_checks_run_on_live_state_then_teardown(manager, tmp_path):
+    (tmp_path / "fx.py").write_text(FX)
+    register("test_obs", two_pings_then_end)
+    run_dir = run(manager, make_suite("test_obs", setup="fx.seed", teardown="fx.clear", graders=GRADERS,
+                                      tmp_base=tmp_path))
+    data, events = trial(run_dir)
+    obs = observations(run_dir)
+    assert obs["state_checks"]["fx.status"] == {"ok": True, "value": {"status": "open"}}
+    assert obs["state_checks"]["fx.broken"]["ok"] is False and "KeyError" in obs["state_checks"]["fx.broken"]["error"]
+    ping_indices = [str(e["index"]) for e in events if e["type"] == "tool_call"]
+    assert list(obs["tool_checks"]["ping:fx.call_ok"]) == ping_indices and len(ping_indices) == 2
+    assert all(v == {"ok": True, "value": True} for v in obs["tool_checks"]["ping:fx.call_ok"].values())
+    assert "ping:fx.args_only" not in obs["tool_checks"]       # (call)-only predicates wait for grading
+    session_dir = Path(data["session_dir"])
+    assert (session_dir / "torn_down").exists() and not (session_dir / "state.txt").exists()
+    assert data["teardown_error"] is None and data["observation_errors"] == ["fx.broken"]
+
+
+def test_teardown_runs_after_timeout_and_checks_see_partial_state(manager, tmp_path):
+    (tmp_path / "fx.py").write_text(FX)
+
+    async def slow(n):
+        await asyncio.sleep(30)
+    register("test_obs_slow", lambda b: lambda n: slow(n))
+    run_dir = run(manager, make_suite("test_obs_slow", setup="fx.seed", teardown="fx.clear", timeout_s=0.5,
+                                      graders=GRADERS[:1], tmp_base=tmp_path))
+    data, _ = trial(run_dir)
+    assert data["status"] == "timeout"
+    assert observations(run_dir)["state_checks"]["fx.status"]["value"] == {"status": "open"}
+    assert (Path(data["session_dir"]) / "torn_down").exists()
+
+
+def test_teardown_runs_after_failed_setup(manager, tmp_path):
+    (tmp_path / "fx.py").write_text(FX + "\ndef half_seed(session_dir):\n"
+                                    "    seed(session_dir)\n    raise RuntimeError('db down')\n")
+    register("test_obs_setup", lambda b: lambda n: end())
+    data, _ = trial(run(manager, make_suite("test_obs_setup", setup="fx.half_seed", teardown="fx.clear",
+                                            tmp_base=tmp_path), RunConfig(infra_retry=0)))
+    assert data["status"] == "infra_error"
+    assert (Path(data["session_dir"]) / "torn_down").exists()
+
+
+def test_failed_teardown_is_recorded_without_changing_the_status(manager, tmp_path):
+    (tmp_path / "fx.py").write_text(FX)
+    register("test_obs_td", lambda b: lambda n: end())
+    data, _ = trial(run(manager, make_suite("test_obs_td", teardown="fx.bad_teardown", tmp_base=tmp_path)))
+    assert data["status"] == "completed"
+    assert data["teardown_error"] == "OSError: disk full" and data["attempts"][0]["teardown_error"]

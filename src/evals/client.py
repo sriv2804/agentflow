@@ -10,10 +10,16 @@ One call of run_trial_once() is one attempt of one trial:
   4. enforce timeout_s, max_llm_calls and max_clarifications live; on a breach,
      cancel the session with agent_manager.cancel
   5. read until ChannelClosed, so the session has saved its history
+  6. run every check function that reads the session dir (state_check functions,
+     tool_called predicates taking (call, session_dir)) and keep their results
+  7. teardown(session_dir), always, whatever happened before
+Steps 6 and 7 also run after a timeout, a limit, an agent error or a failed setup:
+a partial state is still worth checking, and teardown must never be skipped.
 """
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import time
 from dataclasses import dataclass, field
@@ -21,6 +27,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
 from src.core.trace import RecordingTracer
+from src.evals.spec import predicate_reads_state
 from src.runtime.channel import AsyncChannel, ChannelClosed
 from src.runtime.run_context import AgentRunContext
 from src.utils.llm import LLMError
@@ -152,6 +159,50 @@ class AttemptOutcome:
     started_at: float
     finished_at: float
     close_reason: Optional[str] = None
+    observations: Dict[str, Any] = field(default_factory=dict)
+    teardown_error: Optional[str] = None
+
+
+def _observe(fn: Callable[[], Any]) -> Dict[str, Any]:
+    try:
+        return {"ok": True, "value": json.loads(json.dumps(fn(), default=str))}
+    except Exception as e:
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
+def collect_observations(task, load_check: Callable[[str], Callable], session_dir: Path,
+                         events: List[Dict[str, Any]]) -> Dict[str, Any]:
+    """
+    Results of the check functions that read the session dir, taken before teardown:
+        {"state_checks": {"<check>": {"ok", "value" | "error"}},
+         "tool_checks":  {"<tool>:<check>": {"<event index>": {"ok", "value" | "error"}}}}
+    Grading compares these with each grader's config later; it never sees the live state.
+    A tool_called predicate taking only (call) reads no state: it runs at grading time instead.
+    """
+    state: Dict[str, Any] = {}
+    tools: Dict[str, Any] = {}
+    for g in task.graders:
+        check = g.opt("check")
+        if not check:
+            continue
+        try:
+            fn = load_check(check)
+        except Exception as e:
+            failed = {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            if g.type == "state_check":
+                state[check] = failed
+            continue
+        if g.type == "state_check" and check not in state:
+            state[check] = _observe(lambda: fn(session_dir))
+        elif g.type == "tool_called" and predicate_reads_state(fn):
+            key = f"{g.opt('tool')}:{check}"
+            if key in tools:
+                continue
+            tools[key] = {
+                str(e["index"]): _observe(lambda e=e: fn(e, session_dir))
+                for e in events if e["type"] == "tool_call" and e.get("tool") == g.opt("tool")
+            }
+    return {"state_checks": state, "tool_checks": tools}
 
 
 def status_from_close(closed: ChannelClosed, events: List[Dict[str, Any]]) -> tuple:
@@ -172,7 +223,31 @@ def status_from_close(closed: ChannelClosed, events: List[Dict[str, Any]]) -> tu
 
 
 async def run_trial_once(*, manager, task, flow_name: str, session_id: str, session_dir: Path,
-                         setup: Optional[Callable], simulator=None) -> AttemptOutcome:
+                         setup: Optional[Callable], teardown: Optional[Callable] = None,
+                         load_check: Optional[Callable[[str], Callable]] = None,
+                         simulator=None) -> AttemptOutcome:
+    result: Optional[AttemptOutcome] = None
+    try:
+        result = await _interact(manager=manager, task=task, flow_name=flow_name, session_id=session_id,
+                                 session_dir=session_dir, setup=setup, simulator=simulator)
+        if load_check is not None:
+            result.observations = await asyncio.to_thread(
+                collect_observations, task, load_check, session_dir, result.events)
+    finally:
+        if teardown is not None:
+            try:
+                await asyncio.to_thread(teardown, session_dir)
+            except Exception as e:
+                error = f"{type(e).__name__}: {e}"
+                logger.warning("session %s: teardown failed (%s); state may leak into later trials",
+                               session_id, error)
+                if result is not None:
+                    result.teardown_error = error
+    return result
+
+
+async def _interact(*, manager, task, flow_name: str, session_id: str, session_dir: Path,
+                    setup: Optional[Callable], simulator=None) -> AttemptOutcome:
     loop = asyncio.get_running_loop()
     started = time.time()
     breach = asyncio.Event()

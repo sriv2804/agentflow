@@ -4,6 +4,8 @@ Run phase: every task x trial through the eval client, then the files.
     eval_runs/<run_id>/manifest.json               written at the start, completed at the end
     eval_runs/<run_id>/<task>/t<n>/transcript.jsonl one trace event per line (index, t, type, ...)
     eval_runs/<run_id>/<task>/t<n>/trial.json       status, session id, timings, counts, user summary
+    eval_runs/<run_id>/<task>/t<n>/observations.json results of the state-reading checks, taken
+                                                    before teardown (grading reads these, not the state)
 """
 from __future__ import annotations
 
@@ -198,6 +200,7 @@ class Runner:
         trial_dir = run_dir / task.id / f"t{n}"
         trial_dir.mkdir(parents=True, exist_ok=True)
         setup = self.suite.load_callable(task.setup) if task.setup else None
+        teardown = self.suite.load_callable(task.teardown) if task.teardown else None
         attempts: List[Dict[str, Any]] = []
         result: Optional[AttemptOutcome] = None
         for attempt in range(1, self.config.infra_retry + 2):
@@ -207,14 +210,15 @@ class Runner:
             try:
                 result = await run_trial_once(manager=manager, task=task, flow_name=self.suite.flow,
                                               session_id=session_id, session_dir=session_dir,
-                                              setup=setup, simulator=simulator)
+                                              setup=setup, teardown=teardown,
+                                              load_check=self.suite.load_callable, simulator=simulator)
             except Exception as e:  # a harness bug must not take the whole run down
                 now = time.time()
                 result = AttemptOutcome(status="infra_error", reason=f"harness failure: {type(e).__name__}: {e}",
                                         session_id=session_id, events=[], user={}, started_at=now,
                                         finished_at=now)
             attempts.append({"attempt": attempt, "session_id": session_id, "status": result.status,
-                             "reason": result.reason,
+                             "reason": result.reason, "teardown_error": result.teardown_error,
                              "duration_s": round(result.finished_at - result.started_at, 3)})
             if result.status != "infra_error":
                 break
@@ -236,17 +240,27 @@ class Runner:
             "finished_at": datetime.fromtimestamp(result.finished_at, timezone.utc).isoformat(),
             "duration_s": round(result.finished_at - result.started_at, 3),
             "close_reason": result.close_reason,
+            "teardown_error": result.teardown_error,
+            "observation_errors": [
+                k for k, v in result.observations.get("state_checks", {}).items() if not v["ok"]
+            ] + [
+                f"{k}@{i}" for k, calls in result.observations.get("tool_checks", {}).items()
+                for i, v in calls.items() if not v["ok"]
+            ],
             "attempts": attempts,
             "counts": trial_counts(result.events),
             "user": user,
             "limits": task.limits.model_dump(),
         }
         write_transcript(trial_dir / "transcript.jsonl", result.events)
+        write_json(trial_dir / "observations.json",
+                   result.observations or {"state_checks": {}, "tool_checks": {}})
         write_json(trial_dir / "trial.json", data)
         c = data["counts"]
         self.log(f"  {task.id} t{n}: {result.status}"
                  f"{' (excluded)' if excluded else ''}  {data['duration_s']:.1f}s  "
                  f"llm_calls={c['llm_calls']} tools={c['tool_calls']} sim_calls={user['sim_calls']}"
-                 + (f"  - {result.reason}" if result.reason else ""))
+                 + (f"  - {result.reason}" if result.reason else "")
+                 + (f"  [teardown failed: {result.teardown_error}]" if result.teardown_error else ""))
         return TrialRecord(task=task.id, trial=n, status=result.status, excluded=excluded,
                            dir=trial_dir, data=data)

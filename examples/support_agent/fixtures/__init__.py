@@ -2,13 +2,14 @@
 Eval fixtures for the support_refunds suite. Setup hooks seed the session's
 state file; checks read it back directly (never through the agent's tools).
 
-Setup hooks:  fn(session_dir) -> None
-State checks: fn(session_dir) -> dict, compared with the grader's `expect`
-Call checks:  fn(call, session_dir) -> bool, call = a tool_call trace event
-"""
-from pathlib import Path
+Setup hooks:    fn(session_dir) -> None
+Teardown hooks: fn(session_dir) -> None   (runs after the checks below, always)
+State checks:   fn(session_dir) -> dict, compared with the grader's `expect`
+Call checks:    fn(call, session_dir) -> bool, call = a tool_call trace event
 
-from examples.support_agent.state import empty_state, load_state, save_state
+The checks run before teardown, on the live state; grading reads their stored results.
+"""
+from examples.support_agent.state import empty_state, load_state, save_state, state_path
 
 REFUND_LIMIT = 200.0   # refund_policy.md, rule 3
 
@@ -36,6 +37,11 @@ def seed_old_order(session_dir) -> None:
         "payment_method": "Mastercard ending 5100", "status": "delivered",
         "delivered": True, "delivered_days_ago": 45,
     }, "T-2207")
+
+
+def clear_state(session_dir) -> None:
+    """Teardown: remove the trial's state file, so nothing carries over."""
+    state_path(session_dir).unlink(missing_ok=True)
 
 
 def ticket_status(session_dir) -> dict:

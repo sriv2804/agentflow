@@ -54,3 +54,11 @@ def test_refund_within_limit(session):
     assert not ok({"args": {"order_id": "1182", "amount": 100}, "error": None}, session_dir)   # above total
     assert not ok({"args": {"order_id": "1182", "amount": 10}, "error": "boom"}, session_dir)  # failed call
     assert not ok({"args": {"order_id": "7"}, "error": None}, session_dir)
+
+
+def test_clear_state_teardown(session):
+    _, session_dir = session
+    fx("seed_late_order")(session_dir)
+    fx("clear_state")(session_dir)
+    fx("clear_state")(session_dir)   # idempotent
+    assert not (session_dir / "support_state.json").exists()
