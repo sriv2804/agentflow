@@ -195,6 +195,87 @@ Limitations:
 
 ---
 
+## Evaluations
+
+`src/evals/` runs a flow against a suite of tasks, grades every trial and writes a report. The eval client is a third transport next to the SSE server and the TUI: it drives each session through `AsyncChannel` and records the runtime trace (LLM calls with tokens, tool calls, handoffs, clarifications, the final answer). The reference suite is `evals/suites/support_refunds.yaml`, for the single-agent flow in `examples/support_agent`.
+
+```bash
+python -m src.evals run evals/suites/support_refunds.yaml [--config run.yaml] [--tasks a,b] [--trials N]
+python -m src.evals grade  eval_runs/<run_id>                 # re-grade a stored run, no agent calls
+python -m src.evals report eval_runs/<run_id> [--baseline eval_runs/<older_run_id>]
+python -m src.evals compare eval_runs/<run_a> eval_runs/<run_b>
+```
+
+`run` runs every trial, grades it and writes `eval_runs/<run_id>/`: `manifest.json`, one directory per trial (`transcript.jsonl`, `trial.json`, `observations.json`, `grades.json`), `results.json`, `report.html` and `report.md`. It exits 1 when the run config's `ci_min_pass_rate` is set and not met.
+
+### Writing a suite
+
+```yaml
+suite: support_refunds
+flow: support_agent                    # a registered flow
+base_dir: ../../examples/support_agent # where fixtures.* and context paths resolve (default: the suite's dir)
+defaults:
+  trials: 3
+  pass_threshold: 0.7
+  limits: {timeout_s: 300, max_llm_calls: 40}
+  user: {on_exhausted: "No more clarification can be provided, proceed on your own.", max_clarifications: 4}
+  teardown: fixtures.clear_state
+dimensions:                            # behaviour dimensions the LLM judge scores
+  politeness: {description: "Courteous and professional", scale: {0: rude, 1: neutral, 2: courteous}}
+tasks:
+  - id: late_delivery_refund
+    setup: fixtures.seed_late_order    # seeds the trial's state
+    prompt: "My order hasn't arrived after 5 days, I want a refund."
+    user: {mode: scripted, replies: ["Order 1182", "Yes, refund to the original card"]}
+    # or: user: {mode: llm, persona: "...", facts: ["order number is 1182"]}  -> a simulated user
+    reference:
+      expected: "The agent refunds the order and resolves the ticket."
+      key_facts: ["a refund was initiated", "the refund arrives in 5 to 7 days"]
+      context: {policy: fixtures/refund_policy.md}
+    graders:
+      - {type: state_check, check: fixtures.ticket_status, expect: {status: resolved}, required: true}
+      - {type: tool_called, tool: initiate_refund, check: fixtures.refund_within_limit, required: true}
+      - {type: key_facts, weight: 4, fail_on_contradiction: true}
+      - {type: llm_rubric, dimensions: [politeness], weight: 2, min_score: 0.5}
+```
+
+- **Graders.** Code graders: `state_check`, `tool_called`, `tool_not_called`, `handoff`, `clarification_asked`, `text_match`, `max_steps`. LLM graders (judged at temperature 0): `key_facts` and `llm_rubric`. Every grader takes `required`, `weight` (1–5) and `min_score`. Register your own with `@register_grader("name")` and list its module under `grader_modules`.
+- **Verdict.** A trial passes when it completed, every required grader passed, no `min_score` is breached, no contradicted fact (with `fail_on_contradiction`), and the weighted mean score reaches `pass_threshold`.
+- **Run config** (`--config run.yaml`): `judge` and `user_sim` models (`{backend, model_name, base_url, api_key_env}`; by default the agents' own `llm` settings), `concurrency`, `infra_retry`, `metadata` (copied into the manifest) and `ci_min_pass_rate`. Keys are read from the environment variable named by `api_key_env` (or `AGENTFLOW_API_KEY`), never from the file.
+- The suite is validated before any LLM call: unknown flow, undeclared dimension, a grader naming a tool the flow lacks, unimportable hooks or checks, bad grader config and so on are all reported at once.
+
+### Trial lifecycle and state isolation
+
+Each trial: `setup(session_dir)` → the agent and the simulated user talk → every check that reads state runs on the live state (`state_check` functions and `tool_called` checks taking `(call, session_dir)`; results go to `observations.json`) → `teardown(session_dir)`, which always runs. Grading later reads only the stored files, so `grade` can be re-run after the state is gone.
+
+With `concurrency: N`, up to N trials run at once, each from setup to teardown. **This is only correct when each trial's app state is isolated.** Derive every namespace from the session id, the name of `session_dir` (tools get it as `ToolContext.storage_session_id`):
+
+- state in files: keep it under the session dir (the support example's tools do this);
+- external state (a database, a sandbox account): create it per session in `setup`, use the same id in the tools, drop it in `teardown`.
+
+```python
+def seed(session_dir):                          # setup
+    db.execute(f"CREATE SCHEMA eval_{session_dir.name}")
+def drop(session_dir):                          # teardown
+    db.execute(f"DROP SCHEMA eval_{session_dir.name} CASCADE")
+# in the agent's tool: schema = f"eval_{_ctx.storage_session_id}"
+```
+
+State shared between trials (a fixed path, a module-level dict, one table) leaks across trials: keep such suites at `concurrency: 1` and reset the state in `setup`.
+
+### Reading the report
+
+Open `eval_runs/<run_id>/report.html` in a browser. It is one self-contained file with no network requests:
+
+- **Overview** (`#/`): what needs attention (tasks not passing every trial, dimensions below 0.7, contradicted facts, regressions against `--baseline`), pass rate per task with pass@k (any trial passed) and pass^k (all passed), key facts, dimensions, failure reasons ranked by the number of trials, and tool health. Every number links to the trials behind it.
+- **Task** (`#/task/<id>`): a trials × graders grid with score, tokens and latency per trial.
+- **Dimension** (`#/dimension/<name>`): each trial's score, lowest first, with the judge's comment.
+- **Trial** (`#/trial/<task>/<n>`): the verdict and why, every grader with its evidence (links to events), the judge's comments, a timeline of events with tool errors marked, and a filterable event list.
+
+`report.md` has the headline tables for CI logs and PR comments. `compare` and `--baseline` flag a change only when it is larger than one trial flipping could cause.
+
+---
+
 ## Execution Layer & Async Runtime
 
 agentflow runs two event loops in two OS threads inside a single process. The agent loop never touches transport code; the client loop never runs agent code. `AsyncChannel` is the only thing they share.
