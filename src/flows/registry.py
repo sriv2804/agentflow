@@ -23,5 +23,9 @@ def _load_example_flows():
         import examples.competitive_analysis  # noqa: F401
     except ImportError as e:
         print(f"Warning: could not load competitive_analysis flow: {e}")
+    try:
+        import examples.support_agent  # noqa: F401
+    except ImportError as e:
+        print(f"Warning: could not load support_agent flow: {e}")
 
 _load_example_flows()
