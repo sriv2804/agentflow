@@ -399,3 +399,57 @@ def test_failed_teardown_is_recorded_without_changing_the_status(manager, tmp_pa
     data, _ = trial(run(manager, make_suite("test_obs_td", teardown="fx.bad_teardown", tmp_base=tmp_path)))
     assert data["status"] == "completed"
     assert data["teardown_error"] == "OSError: disk full" and data["attempts"][0]["teardown_error"]
+
+
+# ---------------- concurrency across the lifecycle ----------------
+
+FX_CONC = """
+import threading
+lock = threading.Lock()
+live = {"now": 0, "peak": 0}
+
+def seed(session_dir):
+    with lock:
+        live["now"] += 1
+        live["peak"] = max(live["peak"], live["now"])
+    (session_dir / "owner.txt").write_text(session_dir.name)
+
+def owner(session_dir):
+    return {"owner": (session_dir / "owner.txt").read_text()}
+
+def clear(session_dir):
+    (session_dir / "owner.txt").unlink()
+    with lock:
+        live["now"] -= 1
+"""
+
+
+def run_concurrent(manager, tmp_path, flow, concurrency):
+    (tmp_path / "fxc.py").write_text(FX_CONC)
+
+    async def slow_end(n):
+        await asyncio.sleep(0.3)
+        return end()
+    register(flow, lambda b: lambda n: slow_end(n))
+    suite = make_suite(flow, trials=3, setup="fxc.seed", teardown="fxc.clear", tmp_base=tmp_path,
+                       graders=[GraderSpec(type="state_check", check="fxc.owner", expect={})])
+    run_dir = run(manager, suite, RunConfig(concurrency=concurrency))
+    live = suite.load_callable("fxc.seed").__globals__["live"]
+    return run_dir, live
+
+
+def test_concurrent_trials_overlap_and_each_sees_only_its_own_state(manager, tmp_path):
+    run_dir, live = run_concurrent(manager, tmp_path, "test_conc", concurrency=3)
+    assert live["peak"] == 3 and live["now"] == 0        # all three in flight at once, all torn down
+    for n in (1, 2, 3):
+        data, _ = trial(run_dir, n=n)
+        obs = json.loads((run_dir / "t" / f"t{n}" / "observations.json").read_text())
+        assert data["status"] == "completed"
+        assert obs["state_checks"]["fxc.owner"]["value"] == {"owner": data["session_id"]}
+        assert not (Path(data["session_dir"]) / "owner.txt").exists()
+    assert len({trial(run_dir, n=n)[0]["session_id"] for n in (1, 2, 3)}) == 3
+
+
+def test_a_concurrency_slot_is_held_until_teardown(manager, tmp_path):
+    _, live = run_concurrent(manager, tmp_path, "test_conc_one", concurrency=1)
+    assert live["peak"] == 1   # the next trial's setup never starts before the previous teardown

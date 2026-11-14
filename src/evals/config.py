@@ -3,7 +3,8 @@ Run config (YAML via --config, or CLI flags):
 
     judge:    {backend, model_name, base_url, api_key_env}   # default: the agents' llm settings
     user_sim: {backend, model_name, base_url, api_key_env}   # default: the judge
-    concurrency: 1
+    concurrency: 1          # trials in flight at once, each from setup to teardown; only
+                            # correct when every trial's app state is isolated (see src/evals/__init__.py)
     infra_retry: 1
     metadata: {}            # free-form, copied into the manifest (git_sha, label, ...)
     ci_min_pass_rate: null  # optional, 0..1

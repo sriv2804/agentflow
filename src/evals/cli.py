@@ -44,6 +44,10 @@ def cmd_run(args) -> int:
     n_trials = sum(runner.trials_for(t) for t in runner.tasks)
     print(f"suite {suite.name}: {len(runner.tasks)} task(s), {n_trials} trial(s), "
           f"concurrency {config.concurrency}")
+    if config.concurrency > 1:
+        print("note: trials run concurrently. Each trial's app state must be isolated: kept under its "
+              "session dir, or namespaced per trial by the setup/teardown hooks. Shared state leaks "
+              "between trials.")
     started = time.time()
     run_dir = asyncio.run(runner.run())
     totals = json.loads((run_dir / "manifest.json").read_text())["run_totals"]
@@ -65,7 +69,10 @@ def main(argv=None) -> int:
     run.add_argument("--config", help="run config YAML (judge, user_sim, concurrency, ...)")
     run.add_argument("--tasks", help="comma-separated task ids to run (default: all)")
     run.add_argument("--trials", type=int, help="trials per task (overrides the suite)")
-    run.add_argument("--concurrency", type=int, help="trials run at once (overrides the config)")
+    run.add_argument("--concurrency", type=int,
+                     help="trials run at once, each from setup to teardown (overrides the config); "
+                          "only correct when each trial's app state is isolated by the suite's "
+                          "session dir or setup/teardown hooks")
     run.add_argument("--output-dir", help="where run directories go (default: eval_runs)")
     run.set_defaults(func=cmd_run)
 

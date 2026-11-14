@@ -166,6 +166,8 @@ class Runner:
             manager = AsyncAgentManager()
             manager.run()
 
+        # one slot per trial for its whole lifecycle (setup -> interact -> checks -> teardown,
+        # infra retries included); isolating app state between trials is the suite's job
         sem = asyncio.Semaphore(self.config.concurrency)
         jobs = [(task, n) for task in self.tasks for n in range(1, self.trials_for(task) + 1)]
 

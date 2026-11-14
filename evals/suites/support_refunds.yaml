@@ -3,6 +3,8 @@ flow: support_agent
 # setup/check modules (fixtures.*) and context paths resolve relative to this directory
 base_dir: ../../examples/support_agent
 defaults:
+  # each trial keeps its state in its own session dir (seeded by setup, removed by teardown),
+  # so trials can run concurrently
   teardown: fixtures.clear_state             # runs after the state checks, every trial
   trials: 3
   pass_threshold: 0.7
