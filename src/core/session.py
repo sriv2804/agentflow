@@ -6,6 +6,7 @@ from src.core.memory import MemoryManager
 from src.tools.common import ToolCall, ToolManager
 from src.core.flow import AgentsFlow
 from pathlib import Path
+from src.core.trace import Tracer, NOOP_TRACER
 
 @dataclass
 class AgentContext:
@@ -47,7 +48,8 @@ class SessionContext:
         channel : AsyncChannel,
         *,
         logger,
-        workspace_dir : Path
+        workspace_dir : Path,
+        tracer : Optional[Tracer] = None
     ) -> None:
         self.session_id = session_id
         self.channel = channel
@@ -55,6 +57,8 @@ class SessionContext:
         self.user_chat = MemoryManager()
         self.data : Dict[str, Any] = {}
         self.workspace_dir = workspace_dir
+        # trace sink for the runtime's emit points; NoopTracer unless a client (the eval harness) sets one
+        self.tracer : Tracer = tracer if tracer is not None else NOOP_TRACER
         
     def get_agent(self, agent_id: str):
         agent_ctx = self.agents.get(agent_id)

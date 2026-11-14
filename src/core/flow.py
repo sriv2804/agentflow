@@ -1,6 +1,7 @@
 from __future__ import annotations
 from typing import Any, Dict, Optional, List, TYPE_CHECKING
 from dataclasses import dataclass
+from src.core.trace import tracer_of, safe_emit
 
 if TYPE_CHECKING:
     from src.core.agent import Agent
@@ -44,6 +45,9 @@ class AgentsFlow:
     ):
         curr_agent = self.start_agent
         edge = initial_edge if initial_edge else Edge()
+        tracer = tracer_of(session_ctx)
+        safe_emit(tracer, "handoff", from_agent=edge.callee or "user", action=None,
+                  to_agent=curr_agent.agent_name)
         while True:
             agent_ctx = session_ctx.get_agent(curr_agent.agent_name)
             edge = await curr_agent.execute(
@@ -54,5 +58,10 @@ class AgentsFlow:
             )
             if edge.call_to is None or edge.call_to == "end":
                 #we can also use a terminal edge contract to end the flow
+                safe_emit(tracer, "handoff", from_agent=curr_agent.agent_name, action=edge.call_to,
+                          to_agent="user" if edge.call_to == "end" else None)
                 return
-            curr_agent = curr_agent.successors[edge.call_to]
+            next_agent = curr_agent.successors[edge.call_to]
+            safe_emit(tracer, "handoff", from_agent=curr_agent.agent_name, action=edge.call_to,
+                      to_agent=next_agent.agent_name)
+            curr_agent = next_agent
