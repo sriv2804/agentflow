@@ -9,9 +9,24 @@ import ollama as ollama_client
 
 
 class LLMClient(ABC):
+    """
+    invoke() returns the response text. After each call, last_usage holds the
+    token counts the inference API reported ({"tokens_in", "tokens_out"}, None
+    when the provider did not report them) and last_retries the number of
+    retried attempts, so callers (the trace) can read them without changing
+    invoke()'s return type.
+    """
+    last_usage: Optional[dict] = None
+    last_retries: int = 0
+
     @abstractmethod
     async def invoke(self, prompt: str) -> str:
         """Single prompt string in, response string out."""
+
+
+def _usage(tokens_in, tokens_out) -> dict:
+    as_int = lambda v: v if isinstance(v, int) else None
+    return {"tokens_in": as_int(tokens_in), "tokens_out": as_int(tokens_out)}
 
 
 class LLMError(Exception):
@@ -85,8 +100,10 @@ class OpenAIClient(LLMClient):
         model_name: str,
         base_url: Optional[str] = None,
         api_key_env: Optional[str] = None,
+        temperature: Optional[float] = None,
     ):
         self.model_name = model_name
+        self.temperature = temperature  # None: the provider's default (unchanged behaviour)
         if not base_url:
             raise LLMError("No endpoint for the openai backend: set llm.base_url in config.yaml or AGENTFLOW_MODEL_BASE_URL.")
         api_key = resolve_api_key(api_key_env)
@@ -98,12 +115,19 @@ class OpenAIClient(LLMClient):
         )
 
     async def invoke(self, prompt: str) -> str:
+        self.last_usage, self.last_retries = None, 0
+        opts = {} if self.temperature is None else {"temperature": self.temperature}
         for attempt in range(LLM_RETRIES + 1):
+            self.last_retries = attempt
             try:
                 response = await self._client.chat.completions.create(
                     model=self.model_name,
                     messages=[{"role": "user", "content": prompt}],
+                    **opts,
                 )
+                usage = getattr(response, "usage", None)
+                self.last_usage = _usage(getattr(usage, "prompt_tokens", None),
+                                         getattr(usage, "completion_tokens", None))
                 return response.choices[0].message.content
             except (RateLimitError, InternalServerError) as e:
                 wait = retry_wait(e, attempt)
@@ -116,16 +140,23 @@ class OpenAIClient(LLMClient):
 
 
 class OllamaClient(LLMClient):
-    def __init__(self, model_name: str, base_url: str = "http://localhost:11434"):
+    def __init__(self, model_name: str, base_url: str = "http://localhost:11434",
+                 temperature: Optional[float] = None):
         self.model_name = model_name
+        self.temperature = temperature  # None: the model's default (unchanged behaviour)
         self._client = ollama_client.AsyncClient(host=base_url)
 
     async def invoke(self, prompt: str) -> str:
+        self.last_usage, self.last_retries = None, 0
+        opts = {} if self.temperature is None else {"options": {"temperature": self.temperature}}
         try:
             response = await self._client.chat(
                 model=self.model_name,
                 messages=[{"role": "user", "content": prompt}],
+                **opts,
             )
+            self.last_usage = _usage(getattr(response, "prompt_eval_count", None),
+                                     getattr(response, "eval_count", None))
             return response.message.content
         except Exception as e:
             raise LLMError(f"Ollama call failed: {e}") from e
@@ -138,9 +169,12 @@ class LLM:
         backend: str = "openai",
         base_url: Optional[str] = None,
         api_key_env: Optional[str] = None,
+        temperature: Optional[float] = None,
     ):
         #only forward what's set so each client keeps its own defaults
         opts = {"base_url": base_url} if base_url else {}
+        if temperature is not None:
+            opts["temperature"] = temperature
         if backend == "openai":
             if api_key_env:
                 opts["api_key_env"] = api_key_env
@@ -152,3 +186,11 @@ class LLM:
 
     async def invoke(self, prompt: str) -> str:
         return await self.client.invoke(prompt)
+
+    @property
+    def last_usage(self) -> Optional[dict]:
+        return getattr(self.client, "last_usage", None)
+
+    @property
+    def last_retries(self) -> int:
+        return getattr(self.client, "last_retries", 0)

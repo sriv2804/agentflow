@@ -6,6 +6,7 @@ import asyncio
 import json
 import os
 import re
+import time
 import yaml
 
 from src.core.memory import MemoryManager
@@ -17,6 +18,7 @@ from src.core.skill_store import SkillStore
 from src.core.recall_store import RecallStore
 from src.core.fact_store import FactStore
 from src.core.storage import get_working_memory_path, get_conversation_history_path
+from src.core.trace import tracer_of, safe_emit
 
 if TYPE_CHECKING:
     from src.core.session import SessionContext, AgentContext
@@ -193,6 +195,7 @@ class Agent:
         )
         runtime_state = RuntimeState()
         channel = session_context.channel
+        tracer = tracer_of(session_context)
         parse_errors = []
         while not runtime_state.should_yield and not runtime_state.irrecoverable_error:
             if runtime_state.pending_tool_call:
@@ -203,7 +206,12 @@ class Agent:
                     "agent": self.agent_name,
                     "content": f"invoking tool : {tool_call.tool_name}"
                 })
+                tool_started = time.monotonic()
                 result =  await tool_manager.execute_tool(tool_call)
+                safe_emit(tracer, "tool_call", agent=self.agent_name, tool=tool_call.tool_name,
+                          args=tool_call.args, output=tool_call.output,
+                          error=str(tool_call.exception) if tool_call.exception else None,
+                          latency_s=round(time.monotonic() - tool_started, 4))
                 runtime_state.pending_tool_call = False
                 if tool_call.exception:
                     scratchpad.append_trail(
@@ -218,6 +226,7 @@ class Agent:
             elif runtime_state.needs_clarification:
                 query = runtime_state.clarification
                 agent_memory_manager.append_msg(role=self.agent_name, content=f"[to {self.resolver}] {query}")
+                safe_emit(tracer, "clarification", agent=self.agent_name, to=self.resolver, query=query)
                 if self.resolver == "user":
                         await channel.send_to_client(
                             {
@@ -229,6 +238,8 @@ class Agent:
                         # the session may sit here for a long time: persist before pausing
                         await self._save_history(agent_memory_manager)
                         response_from_client = await channel.receive_from_client()
+                        safe_emit(tracer, "user_message", agent=self.agent_name,
+                                  content=response_from_client, initial=False)
                         agent_memory_manager.append_msg(role='user', content=response_from_client)
                         await self._save_history(agent_memory_manager)
                         await self._recall(session_context, agent_context, role="user", content=response_from_client)
@@ -268,10 +279,16 @@ class Agent:
                     f.write(prompt_for_llm)
                 # ---- END LOGGING ----
                 
-                response_from_llm = await self.llm.invoke(prompt_for_llm)
+                llm_started = time.monotonic()
+                try:
+                    response_from_llm = await self.llm.invoke(prompt_for_llm)
+                except Exception as e:
+                    self._emit_llm_call(tracer, llm_started, parse_ok=False, error=f"{type(e).__name__}: {e}")
+                    raise
                 try:
                     parsed_llm_output = self.parse_llm_output(response_from_llm, tool_manager)
                 except Exception as e:
+                    self._emit_llm_call(tracer, llm_started, parse_ok=False, error=str(e))
                     #feed the error to the llm and prompt it again
                     parse_errors.append(str(e))
                     if len(parse_errors) > 3:
@@ -291,6 +308,8 @@ class Agent:
                     **parsed_llm_output['runtime_state']
                 )
                 summary = parsed_llm_output.get("summary", "")
+                self._emit_llm_call(tracer, llm_started, parse_ok=True, summary=summary,
+                                    action=self._action_of(runtime_state))
                 await self._recall(session_context, agent_context, role="agent", content=response_from_llm)
                 scratchpad.append_trail(f"[THOUGHT] {summary}")
                 await channel.send_to_client({
@@ -299,6 +318,8 @@ class Agent:
                     "content": summary
                 })
         if runtime_state.irrecoverable_error:
+            # this path still sends a normal "done": the trace is how a client tells it from success
+            safe_emit(tracer, "error", agent=self.agent_name, error=runtime_state.error_ctx)
             await self._save_history(agent_memory_manager)
             await channel.send_to_client({
                 "message_type":  "done",
@@ -324,6 +345,7 @@ class Agent:
         agent_memory_manager.update_summary()
         await self._save_history(agent_memory_manager)
         if runtime_state.yield_action == "end":
+            safe_emit(tracer, "final", agent=self.agent_name, output=runtime_state.yield_output)
             await channel.send_to_client({
                 "message_type": "done",
                 "agent": self.agent_name,
@@ -335,6 +357,27 @@ class Agent:
             data = runtime_state.yield_output
         )
     
+    def _emit_llm_call(self, tracer, started: float, parse_ok: bool, summary: str = None,
+                       action: str = None, error: str = None) -> None:
+        usage = getattr(self.llm, "last_usage", None)
+        usage = usage if isinstance(usage, dict) else {}
+        retries = getattr(self.llm, "last_retries", None)
+        safe_emit(tracer, "llm_call", agent=self.agent_name,
+                  latency_s=round(time.monotonic() - started, 4),
+                  tokens_in=usage.get("tokens_in"), tokens_out=usage.get("tokens_out"),
+                  retries=retries if isinstance(retries, int) else None,
+                  parse_ok=parse_ok, action=action, summary=summary, error=error)
+
+    @staticmethod
+    def _action_of(state: RuntimeState) -> str:
+        if state.pending_tool_call:
+            return "tool_call"
+        if state.needs_clarification:
+            return "clarification"
+        if state.should_yield:
+            return "yield"
+        return "error"
+
     async def _save_history(self, memory_manager: MemoryManager) -> None:
         """Persist this agent's conversation history (per turn, not only at session end)."""
         if memory_manager.history_path:

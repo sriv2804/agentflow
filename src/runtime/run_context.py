@@ -3,11 +3,13 @@ import json
 import logging
 import os
 from dataclasses import dataclass
+from typing import Optional
 from datetime import datetime, timezone
 from pathlib import Path
 from src.runtime.channel import AsyncChannel
 from src.core.session import SessionContext
 from src.core.flow import Edge
+from src.core.trace import Tracer, NOOP_TRACER, safe_emit
 from src.core.storage import configured_working_dir, get_session_status_path
 from src.flows.registry import get_flow
 
@@ -22,6 +24,8 @@ class AgentRunContext:
     session_id: str
     channel: AsyncChannel
     flow_name: str = "qa_agent"
+    # optional trace sink (the eval harness passes a recording tracer); NoopTracer when absent
+    tracer: Optional[Tracer] = None
 
 async def run_on_channel(run_ctx: AgentRunContext) -> None:
     """
@@ -38,10 +42,12 @@ async def run_on_channel(run_ctx: AgentRunContext) -> None:
         session_id=run_ctx.session_id,
         channel=channel,
         logger=None,
-        workspace_dir=Path(".")
+        workspace_dir=Path("."),
+        tracer=run_ctx.tracer if run_ctx.tracer is not None else NOOP_TRACER,
     )
 
     first_input = await channel.receive_from_client()
+    safe_emit(session_ctx.tracer, "user_message", content=first_input, initial=True)
 
     flow, flow_ctx = get_flow(run_ctx.flow_name)
 
