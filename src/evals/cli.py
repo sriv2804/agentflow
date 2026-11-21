@@ -2,9 +2,14 @@
 python -m src.evals run <suite.yaml> [--config run.yaml] [--tasks a,b] [--trials N]
                         [--concurrency N] [--output-dir DIR]
 python -m src.evals grade <run_dir> [--config run.yaml] [--suite suite.yaml] [--concurrency N]
+python -m src.evals report <run_dir> [--baseline <run_dir>]
+python -m src.evals compare <run_a> <run_b> [--json]
 
-`run` runs the trials, then grades them. `grade` re-grades a stored run without
-re-running the agent (e.g. after changing a grader's config in the suite).
+`run` runs the trials, grades them and writes the reports; it exits 1 when the run
+config's ci_min_pass_rate is set and the trial pass rate is below it. `grade`
+re-grades a stored run without re-running the agent (e.g. after changing a
+grader's config). `report` rebuilds results.json, report.html and report.md from
+the stored files. `compare` prints what changed from run_a (baseline) to run_b.
 """
 import argparse
 import asyncio
@@ -13,6 +18,7 @@ import logging
 import sys
 import time
 from pathlib import Path
+from typing import Optional
 
 from dotenv import load_dotenv
 
@@ -62,8 +68,69 @@ def cmd_run(args) -> int:
 
     judge = config.judge_model()
     print(f"\ngrading with judge {judge.backend}:{judge.model_name}")
-    summary = do_grade(run_dir, suite, judge, config.concurrency)
+    do_grade(run_dir, suite, judge, config.concurrency)
+    results = do_report(run_dir, None)
     print(f"total time: {time.time() - started:.1f}s")
+    return ci_exit_code(results, config.ci_min_pass_rate)
+
+
+def ci_exit_code(results: dict, ci_min_pass_rate) -> int:
+    if ci_min_pass_rate is None:
+        return 0
+    rate = results["suite"]["pass_rate"]
+    if rate is None or rate < ci_min_pass_rate:
+        shown = "no decided trials" if rate is None else f"{rate:.0%}"
+        print(f"CI: trial pass rate {shown} is below ci_min_pass_rate {ci_min_pass_rate:.0%}", file=sys.stderr)
+        return 1
+    print(f"CI: trial pass rate {rate:.0%} meets ci_min_pass_rate {ci_min_pass_rate:.0%}")
+    return 0
+
+
+def do_report(run_dir: Path, baseline: Optional[Path]) -> dict:
+    from src.evals.aggregate import build_results, write_results
+    from src.evals.compare import compare
+    from src.evals.report import write_reports
+    results = write_results(run_dir)
+    comparison = compare(build_results(baseline), results) if baseline else None
+    if comparison:
+        (run_dir / "compare.json").write_text(json.dumps(comparison, indent=2, default=str), encoding="utf-8")
+    paths = write_reports(run_dir, results, comparison)
+    s = results["suite"]
+    rate = "–" if s["pass_rate"] is None else f"{s['pass_rate']:.0%}"
+    print(f"trial pass rate {rate} ({s['passed']}/{s['decided']}); tasks passing every trial "
+          f"{s['tasks_pass_all']}/{s['tasks']}")
+    if comparison:
+        print(f"compared with {baseline.name}: {len(comparison['regressions'])} regression(s), "
+              f"{len(comparison['flagged']) - len(comparison['regressions'])} improvement(s)")
+    print(f"report: {paths['html']}\n        {paths['md']}\nresults: {run_dir / 'results.json'}")
+    return results
+
+
+def _run_dir(path: str) -> Optional[Path]:
+    p = Path(path)
+    if not (p / "manifest.json").exists():
+        print(f"{p} is not a run directory (no manifest.json)", file=sys.stderr)
+        return None
+    return p
+
+
+def cmd_report(args) -> int:
+    run_dir = _run_dir(args.run_dir)
+    baseline = _run_dir(args.baseline) if args.baseline else None
+    if run_dir is None or (args.baseline and baseline is None):
+        return 2
+    do_report(run_dir, baseline)
+    return 0
+
+
+def cmd_compare(args) -> int:
+    from src.evals.aggregate import build_results
+    from src.evals.compare import compare, render_compare_md
+    a, b = _run_dir(args.run_a), _run_dir(args.run_b)
+    if a is None or b is None:
+        return 2
+    c = compare(build_results(a), build_results(b))
+    print(json.dumps(c, indent=2, default=str) if args.json else render_compare_md(c), end="")
     return 0
 
 
@@ -119,7 +186,7 @@ def main(argv=None) -> int:
     parser = argparse.ArgumentParser(prog="python -m src.evals", description="agentflow eval harness")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    run = sub.add_parser("run", help="run a suite and grade it")
+    run = sub.add_parser("run", help="run a suite, grade it and write the reports")
     run.add_argument("suite", help="suite YAML")
     run.add_argument("--config", help="run config YAML (judge, user_sim, concurrency, ...)")
     run.add_argument("--tasks", help="comma-separated task ids to run (default: all)")
@@ -137,6 +204,17 @@ def main(argv=None) -> int:
     grade.add_argument("--suite", help="suite YAML (default: the path recorded in the manifest)")
     grade.add_argument("--concurrency", type=int, help="trials graded at once (bounds judge calls)")
     grade.set_defaults(func=cmd_grade)
+
+    report = sub.add_parser("report", help="write results.json, report.html and report.md for a run")
+    report.add_argument("run_dir", help="eval_runs/<run_id>")
+    report.add_argument("--baseline", help="an earlier run to compare with (regressions show in the report)")
+    report.set_defaults(func=cmd_report)
+
+    cmp = sub.add_parser("compare", help="what changed from run_a (baseline) to run_b")
+    cmp.add_argument("run_a")
+    cmp.add_argument("run_b")
+    cmp.add_argument("--json", action="store_true", help="print the full comparison as JSON")
+    cmp.set_defaults(func=cmd_compare)
 
     args = parser.parse_args(argv)
     load_dotenv()
