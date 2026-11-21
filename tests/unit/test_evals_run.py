@@ -1,6 +1,7 @@
 """Run phase: the eval client drives real sessions (AsyncAgentManager, AsyncChannel,
 run_on_channel) whose agents use a fake LLM."""
 import asyncio
+import concurrent.futures
 import json
 from pathlib import Path
 from types import SimpleNamespace
@@ -8,11 +9,12 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from src.evals.client import UserDriver
+from src.evals.client import UserDriver, cancel_and_drain
 from src.evals.config import RunConfig
 from src.evals.runner import Runner
 from src.evals.spec import GraderSpec, Limits, Reference, Suite, Task, UserSettings
 from src.flows.registry import FLOW_REGISTRY, register_flow
+from src.runtime.channel import ChannelClosed
 from src.runtime.scheduler import AsyncAgentManager
 from src.tools.common import tool
 from src.utils.llm import LLMError
@@ -196,6 +198,54 @@ def test_timeout_cancels_the_session(manager):
     data, _ = trial(run(manager, make_suite("test_slow", timeout_s=0.5)))
     assert data["status"] == "timeout" and "timeout_s" in data["reason"]
     assert data["session_id"] in manager.cancelled and data["close_reason"] == "shutdown"
+
+
+class DrainManager:
+    """Records cancels; cancel() returns a future that never completes (it must not be awaited)."""
+    def __init__(self, fail=False):
+        self.cancelled, self.fail = [], fail
+
+    def cancel(self, session_id):
+        self.cancelled.append(session_id)
+        if self.fail:
+            raise RuntimeError("agent loop gone")
+        return concurrent.futures.Future()
+
+
+class DrainChannel:
+    """receive_from_agent() yields the buffered messages, then closes or blocks."""
+    def __init__(self, buffered=0, closes=True, closed=False):
+        self.buffered, self.closes = buffered, closes
+        self.closed, self.close_reason = closed, ("shutdown" if closed else None)
+
+    async def receive_from_agent(self):
+        if self.buffered:
+            self.buffered -= 1
+            return {"message_type": "info"}
+        if self.closes:
+            raise ChannelClosed("shutdown")
+        await asyncio.Event().wait()
+
+
+def test_drain_returns_the_close_reason_without_waiting_on_the_cancel():
+    m = DrainManager()
+    reason = asyncio.run(cancel_and_drain(m, DrainChannel(buffered=3), "s1", timeout=5))
+    assert reason == "shutdown" and m.cancelled == ["s1"]
+
+
+def test_drain_timeout_on_a_channel_that_never_closed_is_none():
+    assert asyncio.run(cancel_and_drain(DrainManager(), DrainChannel(closes=False), "s1", timeout=0.05)) is None
+
+
+def test_drain_timeout_on_a_closed_channel_returns_its_close_reason():
+    # closed by the done-callback, but the buffered messages were not all read in time
+    channel = DrainChannel(closes=False, closed=True)
+    assert asyncio.run(cancel_and_drain(DrainManager(), channel, "s1", timeout=0.05)) == "shutdown"
+
+
+def test_drain_still_runs_when_the_cancel_fails():
+    m = DrainManager(fail=True)
+    assert asyncio.run(cancel_and_drain(m, DrainChannel(), "s1", timeout=5)) == "shutdown"
 
 
 def test_max_llm_calls_cancels_the_session(manager):

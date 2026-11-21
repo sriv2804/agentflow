@@ -222,6 +222,32 @@ def status_from_close(closed: ChannelClosed, events: List[Dict[str, Any]]) -> tu
     return "infra_error", f"session shut down unexpectedly ({closed.reason})"
 
 
+async def cancel_and_drain(manager, channel: AsyncChannel, session_id: str,
+                           timeout: Optional[float] = None) -> Optional[str]:
+    """
+    Cancels a session the harness is ending and reads the channel until it
+    closes, waiting once, at most `timeout` (DRAIN_TIMEOUT by default).
+
+    The cancel is not awaited: the channel closing is the signal that the
+    session ended, since the done-callback on its task closes it. Returns the
+    close reason, or None when the channel never closed (the task did not end
+    in time). If the channel closed but its buffered messages were not all read
+    in time, the session did end, so its close reason is returned.
+    """
+    try:
+        manager.cancel(session_id)
+    except Exception:
+        logger.exception("session %s: cancel failed", session_id)
+    try:
+        async with asyncio.timeout(DRAIN_TIMEOUT if timeout is None else timeout):
+            while True:
+                await channel.receive_from_agent()
+    except ChannelClosed as closed:
+        return closed.reason
+    except TimeoutError:
+        return channel.close_reason if channel.closed else None
+
+
 async def run_trial_once(*, manager, task, flow_name: str, session_id: str, session_dir: Path,
                          setup: Optional[Callable], teardown: Optional[Callable] = None,
                          load_check: Optional[Callable[[str], Callable]] = None,
@@ -293,20 +319,6 @@ async def _interact(*, manager, task, flow_name: str, session_id: str, session_d
                                      f"({driver.sent} replies sent)")
                 await channel.send_to_agent(text)
 
-    async def cancel_and_drain() -> Optional[str]:
-        try:
-            await asyncio.wait_for(asyncio.wrap_future(manager.cancel(session_id)), DRAIN_TIMEOUT)
-        except Exception:
-            logger.exception("session %s: cancel failed", session_id)
-        try:
-            async with asyncio.timeout(DRAIN_TIMEOUT):
-                while True:
-                    await channel.receive_from_agent()
-        except ChannelClosed as closed:
-            return closed.reason
-        except TimeoutError:
-            return None
-
     try:
         await asyncio.wrap_future(manager.submit(run_ctx))
     except Exception as e:
@@ -340,5 +352,5 @@ async def _interact(*, manager, task, flow_name: str, session_id: str, session_d
             await conv
         except BaseException:
             pass
-    close_reason = await cancel_and_drain()
+    close_reason = await cancel_and_drain(manager, channel, session_id)
     return outcome(status, reason, close_reason)
