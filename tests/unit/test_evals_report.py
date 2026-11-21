@@ -285,3 +285,46 @@ def test_cli_report_and_compare(tmp_path, capsys):
     assert main(["compare", str(a), str(b), "--json"]) == 0
     assert json.loads(capsys.readouterr().out)["run_b"] == "b"
     assert main(["report", str(tmp_path / "nope")]) == 2
+
+
+TASK_DEF = {"prompt": "refund please", "setup": "fixtures.seed", "setup_doc": "Order 1182, ticket open.",
+            "teardown": "fixtures.clear", "expected": "a refund is made",
+            "user": {"mode": "scripted", "replies": ["Order 1182"], "on_exhausted": "proceed", "max_clarifications": 4},
+            "key_facts": ["a refund was initiated"], "context": {"policy": {"source": "policy.md", "text": "30 days"}},
+            "graders": [{"type": "state_check", "required": True, "weight": 1, "check": "fx.status",
+                         "expect": {"status": "resolved"}}],
+            "pass_threshold": 0.7, "limits": {"timeout_s": 300, "max_llm_calls": 40}}
+
+
+def test_task_definition_comes_from_the_manifest(tmp_path):
+    run = make_run(tmp_path, manifest_extra={"tasks": {"refund": TASK_DEF}})
+    tasks = {t["id"]: t for t in build_results(run)["tasks"]}
+    assert tasks["refund"]["definition"] == {**TASK_DEF, "recorded": "manifest"}
+    assert tasks["decline"]["definition"] is None
+
+
+def test_task_definition_falls_back_to_an_unchanged_suite(tmp_path, monkeypatch):
+    import src.evals.runner as runner
+    import src.evals.spec as spec
+    run = make_run(tmp_path)                       # manifest without "tasks", suite hash "abc"
+    suite = type("S", (), {"hash": "abc", "tasks": [type("T", (), {"id": "refund"})()]})()
+    monkeypatch.setattr(spec, "load_suite", lambda path: suite)
+    monkeypatch.setattr(runner, "describe_task", lambda t, s: {"prompt": "from the suite"})
+    tasks = {t["id"]: t for t in build_results(run)["tasks"]}
+    assert tasks["refund"]["definition"] == {"prompt": "from the suite", "recorded": "suite"}
+
+    suite.hash = "changed"                         # the suite changed since the run: show nothing
+    assert all(t["definition"] is None for t in build_results(run)["tasks"])
+
+
+def test_reports_show_the_task_definition(tmp_path):
+    run = make_run(tmp_path, manifest_extra={"tasks": {"refund": {**TASK_DEF, "prompt": XSS}}})
+    results = build_results(run)
+    md = render_md(results)
+    assert "## Tasks" in md and "### refund" in md and "`fixtures.seed`: Order 1182, ticket open." in md
+    assert '- **User:** scripted user; replies: "Order 1182"' in md
+    assert "`state_check` (required, weight 1): check=fx.status, expect={\"status\": \"resolved\"}" in md
+    html = render_html(run, results)
+    assert "<script>alert" not in html             # the prompt is embedded escaped, like every field
+    data = report_data(run, results)
+    assert data["results"]["tasks"][0]["definition"]["prompt"] == XSS

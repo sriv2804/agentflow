@@ -139,6 +139,28 @@ def trial_summary(t: dict) -> dict:
     }
 
 
+def task_definitions(manifest: Dict[str, Any]) -> Dict[str, Dict[str, Any]]:
+    """
+    Each task's definition as it was run: from the manifest, or, for a run made
+    before the manifest recorded it, from the suite file when its hash still
+    matches the run's (a changed suite would describe something else).
+    """
+    if manifest.get("tasks"):
+        return {tid: {**d, "recorded": "manifest"} for tid, d in manifest["tasks"].items()}
+    suite_info = manifest.get("suite") or {}
+    if not suite_info.get("path"):
+        return {}
+    try:
+        from src.evals.runner import describe_task
+        from src.evals.spec import load_suite
+        suite = load_suite(suite_info["path"])
+    except Exception:
+        return {}
+    if suite.hash != suite_info.get("hash"):
+        return {}
+    return {t.id: {**describe_task(t, suite), "recorded": "suite"} for t in suite.tasks}
+
+
 def build_results(run_dir: Path) -> Dict[str, Any]:
     run_dir = Path(run_dir)
     manifest = _read(run_dir / "manifest.json") or {}
@@ -150,6 +172,7 @@ def build_results(run_dir: Path) -> Dict[str, Any]:
     task_order = list((manifest.get("trials") or {}).keys()) or sorted(by_task)
     task_order += [k for k in sorted(by_task) if k not in task_order]
 
+    definitions = task_definitions(manifest)
     tasks = []
     for task_id in task_order:
         ts = by_task.get(task_id, [])
@@ -185,6 +208,7 @@ def build_results(run_dir: Path) -> Dict[str, Any]:
             "dimensions": {name: _mean(vals) for name, vals in sorted(dims.items())},
             "refs": [_ref(t) for t in ts],
             "trial_rows": [trial_summary(t) for t in ts],
+            "definition": definitions.get(task_id),
         })
 
     # dimensions across the suite

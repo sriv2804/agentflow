@@ -268,7 +268,7 @@ State shared between trials (a fixed path, a module-level dict, one table) leaks
 Open `eval_runs/<run_id>/report.html` in a browser. It is one self-contained file with no network requests:
 
 - **Overview** (`#/`): what needs attention (tasks not passing every trial, dimensions below 0.7, contradicted facts, regressions against `--baseline`), pass rate per task with pass@k (any trial passed) and pass^k (all passed), key facts, dimensions, failure reasons ranked by the number of trials, and tool health. Every number links to the trials behind it.
-- **Task** (`#/task/<id>`): a trials × graders grid with score, tokens and latency per trial.
+- **Task** (`#/task/<id>`): the task as it was run (prompt, setup, user, expected outcome, key facts, graders), then a trials × graders grid with score, tokens and latency per trial.
 - **Dimension** (`#/dimension/<name>`): each trial's score, lowest first, with the judge's comment.
 - **Trial** (`#/trial/<task>/<n>`): the verdict and why, every grader with its evidence (links to events), the judge's comments, a timeline of events with tool errors marked, and a filterable event list.
 

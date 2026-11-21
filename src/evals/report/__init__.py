@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Any, Dict, List, Optional
 
 from src.evals.aggregate import load_trials
 
@@ -118,10 +118,46 @@ def render_md(results: Dict[str, Any], comparison: Optional[Dict[str, Any]] = No
         lines += ["", "| failure reason | grader | trials |", "|---|---|---|"]
         for r in s["failure_reasons"]:
             lines.append(f"| {r['reason']} | {_md_cell(r['grader_id'] or '–')} | {r['trials']} |")
+    defined = [t for t in results["tasks"] if t.get("definition")]
+    if defined:
+        lines += ["", "## Tasks"]
+        for t in defined:
+            lines += ["", *_md_task(t["id"], t["definition"])]
     if comparison:
         from src.evals.compare import render_compare_md
         lines += ["", render_compare_md(comparison).replace("## Compare", "## Compare with baseline")]
     return "\n".join(lines).rstrip() + "\n"
+
+
+def _md_task(task_id: str, d: Dict[str, Any]) -> List[str]:
+    u = d.get("user") or {}
+    if u.get("mode") == "llm":
+        client = f"LLM-simulated user ({u.get('persona') or 'no persona'}); knows: " + \
+                 "; ".join(u.get("facts") or []) if u.get("facts") else "LLM-simulated user"
+    else:
+        replies = u.get("replies") or []
+        client = "scripted user; replies: " + (" → ".join(f'"{r}"' for r in replies) if replies else "none")
+    graders = []
+    for g in d.get("graders") or []:
+        opts = [f"{k}={v if isinstance(v, str) else json.dumps(v)}" for k, v in g.items()
+                if k not in ("type", "required", "weight", "min_score")]
+        flags = (["required"] if g.get("required") else []) + [f"weight {g.get('weight', 1)}"] + \
+                ([f"min_score {g['min_score']}"] if g.get("min_score") is not None else [])
+        graders.append(f"`{g['type']}` ({', '.join(flags)})" + (f": {', '.join(opts)}" if opts else ""))
+    lines = [f"### {task_id}", "",
+             f"- **Prompt:** {_md_cell(d.get('prompt', ''))}",
+             f"- **Setup:** `{d['setup']}`" + (f": {_md_cell(d['setup_doc'])}" if d.get("setup_doc") else "")
+             if d.get("setup") else "- **Setup:** none",
+             f"- **User:** {_md_cell(client)}",
+             f"- **Expected:** {_md_cell((d.get('expected') or '–').strip())}"]
+    if d.get("key_facts"):
+        lines.append("- **Key facts:** " + "; ".join(_md_cell(f) for f in d["key_facts"]))
+    if d.get("context"):
+        lines.append("- **Context:** " + ", ".join(f"`{k}`" + (f" ({c['source']})" if c.get("source") else "")
+                                                  for k, c in d["context"].items()))
+    lines.append(f"- **Graders** (pass threshold {d.get('pass_threshold')}):")
+    lines += [f"  - {_md_cell(g)}" for g in graders]
+    return lines
 
 
 def write_reports(run_dir: Path, results: Dict[str, Any], comparison: Optional[Dict[str, Any]] = None) -> Dict[str, Path]:

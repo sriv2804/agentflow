@@ -221,6 +221,49 @@
       el("h3", {}, "Manifest differences"), diffs.length ? el("ul", {}, diffs) : el("p", { class: "empty" }, "none"));
   }
 
+  const GRADER_COMMON = ["type", "required", "weight", "min_score"];
+  function graderSpecItem(g) {
+    const opts = Object.entries(g).filter(([k]) => !GRADER_COMMON.includes(k))
+      .map(([k, v]) => k + ": " + (typeof v === "string" ? v : JSON.stringify(v)));
+    return el("li", {}, el("span", { class: "mono" }, g.type),
+      g.required ? el("span", { class: "badge fail" }, "required") : null,
+      el("span", { class: "badge outline" }, "weight " + (g.weight ?? 1)),
+      g.min_score !== undefined && g.min_score !== null ? el("span", { class: "badge outline" }, "min_score " + g.min_score) : null,
+      opts.length ? el("span", { class: "muted mono" }, opts.join(" · ")) : null);
+  }
+  const plainList = items => items.length ? el("ul", { class: "plain" }, items.map(x => el("li", {}, x)))
+    : el("span", { class: "empty" }, "none");
+
+  function definitionCard(t) {
+    const d = t.definition;
+    if (!d) return card("Task", el("p", { class: "empty" },
+      "This run did not record the task's definition, and the suite file has changed since the run."));
+    const u = d.user || {};
+    const userRows = u.mode === "llm"
+      ? [["client", "LLM-simulated user"], ["persona", u.persona || "–"], ["facts it knows", plainList(u.facts || [])]]
+      : [["client", "scripted user"], ["replies, in order", plainList(u.replies || [])]];
+    userRows.push(["default reply", u.on_exhausted || "–"], ["max clarifications", String(u.max_clarifications ?? "–")]);
+    const context = Object.entries(d.context || {}).map(([k, c]) => el("li", {},
+      el("details", {}, el("summary", {}, el("span", { class: "mono" }, k), c.source ? " (" + c.source + ")" : ""),
+        el("pre", { class: "block" }, c.text))));
+    const lim = d.limits || {};
+    const rows = [
+      ["prompt", el("div", { class: "quote" }, d.prompt)],
+      ["setup", d.setup ? [el("span", { class: "mono" }, d.setup), d.setup_doc ? el("div", { class: "muted" }, d.setup_doc) : null] : "none"],
+      ["teardown", d.teardown ? el("span", { class: "mono" }, d.teardown) : "none"],
+      ...userRows,
+      ["expected", d.expected ? el("div", { class: "quote" }, d.expected) : "–"],
+      ["key facts", plainList(d.key_facts || [])],
+      ["context", context.length ? el("ul", { class: "plain" }, context) : "none"],
+      ["graders", el("ul", { class: "plain" }, (d.graders || []).map(graderSpecItem))],
+      ["pass threshold", String(d.pass_threshold ?? "–")],
+      ["limits", "timeout " + (lim.timeout_s ?? "–") + "s · max LLM calls " + (lim.max_llm_calls ?? "–")],
+    ];
+    return card("Task", el("dl", { class: "meta taskdef" }, rows.map(([k, x]) => [el("dt", {}, k), el("dd", {}, x)])),
+      d.recorded === "suite" ? el("p", { class: "muted" },
+        "Read from the suite file, unchanged since the run (this run's manifest predates recording it).") : null);
+  }
+
   function taskView(id) {
     const t = taskById(id);
     if (!t) return notFound("No task " + id + " in this run.");
@@ -246,6 +289,7 @@
         tile("pass^k", t.pass_pow_k === null ? "–" : t.pass_pow_k ? "✓ yes" : "✗ no"), tile("mean score", num(t.mean_score)),
         tile("client", clientLabel(t.user_mode)), tile("default reply used", t.default_reply_trials + "/" + t.trials),
         tile("mean LLM calls", num(t.mean_llm_calls, 1)), tile("mean latency", num(t.mean_latency_s, 1) + "s")),
+      definitionCard(t),
       card("Trials × graders", table(["trial", "verdict", "status", ...graderIds.map(g => ({ label: g })),
         { label: "score", num: true }, { label: "tokens in / out", num: true }, { label: "latency", num: true },
         { label: "LLM calls", num: true }], rows)),
