@@ -1,0 +1,69 @@
+suite: support_refunds
+flow: support_agent
+# setup/check modules (fixtures.*) and context paths resolve relative to this directory
+base_dir: ../../examples/support_agent
+defaults:
+  # each trial keeps its state in its own session dir (seeded by setup, removed by teardown),
+  # so trials can run concurrently
+  teardown: fixtures.clear_state             # runs after the state checks, every trial
+  trials: 3
+  pass_threshold: 0.7
+  limits: {timeout_s: 300, max_llm_calls: 40}
+  user: {on_exhausted: "No more clarification can be provided, proceed on your own.",
+         max_clarifications: 4}
+dimensions:
+  policy_adherence:
+    description: "Every action and statement is consistent with the supplied policy."
+    scale: {0: "violates policy", 1: "minor deviation", 2: "fully consistent"}
+    needs: [policy]
+  groundedness:
+    description: "Claims are supported by tool outputs in the transcript; nothing invented."
+    scale: {0: "fabricated details", 1: "mostly supported", 2: "fully supported"}
+  politeness:
+    description: "Tone is courteous and professional throughout."
+    scale: {0: "rude", 1: "neutral", 2: "courteous"}
+tasks:
+  - id: late_delivery_refund                 # should act
+    setup: fixtures.seed_late_order          # order 1182, 5 days late, ticket open
+    prompt: "My order hasn't arrived after 5 days, I want a refund."
+    user: {mode: scripted, replies: ["Order 1182", "Yes, refund to the original card"]}
+    reference:
+      expected: >
+        The agent verifies the order, confirms eligibility, initiates a refund within the
+        policy limit, marks the ticket resolved and tells the customer when the refund
+        will arrive.
+      key_facts: ["a refund was initiated", "the refund arrives in 5 to 7 days"]
+      context: {policy: fixtures/refund_policy.md}
+    graders:
+      - {type: state_check, check: fixtures.ticket_status, expect: {status: resolved}, required: true}
+      - {type: tool_called, tool: initiate_refund, check: fixtures.refund_within_limit, required: true}
+      - {type: key_facts, weight: 4, fail_on_contradiction: true}
+      - {type: llm_rubric, dimensions: [policy_adherence, groundedness, politeness], weight: 2, min_score: 0.5}
+  - id: out_of_policy_refund                 # must NOT refund
+    setup: fixtures.seed_old_order           # delivered 45 days ago, policy allows 30
+    prompt: "I want a refund for order 2207."
+    user: {mode: scripted, replies: []}
+    reference:
+      expected: "The agent checks the order, declines the refund and explains the 30 day limit."
+      key_facts: ["the refund is declined", "the policy allows refunds within 30 days"]
+      context: {policy: fixtures/refund_policy.md}
+    graders:
+      - {type: tool_not_called, tool: initiate_refund, required: true}
+      - {type: key_facts, weight: 4, fail_on_contradiction: true}
+      - {type: llm_rubric, dimensions: [policy_adherence, politeness], weight: 2, min_score: 0.5}
+  - id: missing_order_id                     # must ask before acting
+    setup: fixtures.seed_late_order
+    prompt: "Where is my refund? The package never came."
+    user:
+      mode: llm
+      persona: "A customer who is polite but in a hurry."
+      facts: ["order number is 1182", "wants the refund on the original card"]
+    reference:
+      expected: "The agent asks for the order number before acting, then handles the refund."
+      key_facts: ["a refund was initiated", "the refund arrives in 5 to 7 days"]
+      context: {policy: fixtures/refund_policy.md}
+    graders:
+      - {type: clarification_asked, min: 1, required: true}
+      - {type: state_check, check: fixtures.ticket_status, expect: {status: resolved}, required: true}
+      - {type: tool_called, tool: initiate_refund, required: true}
+      - {type: key_facts, weight: 4, fail_on_contradiction: true}
