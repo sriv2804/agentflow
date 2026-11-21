@@ -343,6 +343,27 @@ def test_transcript_manifest_and_trial_files(manager):
     assert (Path(data["session_dir"]) / "conversation_history_helper.json").exists()
 
 
+def test_manifest_records_each_task_as_run(manager, tmp_path):
+    (tmp_path / "hooks.py").write_text(
+        'def seed(session_dir):\n    """Order 1182, ticket open.\n\n    More detail."""\n')
+    register("test_taskdef", lambda b: lambda n: end())
+    suite = make_suite("test_taskdef", replies=["Order 1182"], setup="hooks.seed", tmp_base=tmp_path,
+                       graders=[GraderSpec(type="key_facts", weight=4, fail_on_contradiction=True)])
+    suite.tasks[0].reference = Reference(expected="refund made", key_facts=["a refund was initiated"],
+                                         context={"policy": "policy.md"})
+    suite.tasks[0].context = {"policy": "30 days"}
+    task = json.loads((run(manager, suite) / "manifest.json").read_text())["tasks"]["t"]
+    assert task["prompt"] == "help me" and task["setup"] == "hooks.seed"
+    assert task["setup_doc"] == "Order 1182, ticket open."
+    assert task["user"] == {"mode": "scripted", "replies": ["Order 1182"], "on_exhausted": ON_EXHAUSTED,
+                            "max_clarifications": 4}
+    assert task["expected"] == "refund made" and task["key_facts"] == ["a refund was initiated"]
+    assert task["context"] == {"policy": {"source": "policy.md", "text": "30 days"}}
+    assert task["graders"] == [{"type": "key_facts", "required": False, "weight": 4,
+                                "fail_on_contradiction": True}]
+    assert task["pass_threshold"] == 0.7 and task["limits"] == {"timeout_s": 30.0, "max_llm_calls": 40}
+
+
 def test_task_and_trial_filters(manager):
     register("test_filter", lambda b: lambda n: end())
     suite = make_suite("test_filter", trials=3)

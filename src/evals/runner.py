@@ -1,7 +1,8 @@
 """
 Run phase: every task x trial through the eval client, then the files.
 
-    eval_runs/<run_id>/manifest.json               written at the start, completed at the end
+    eval_runs/<run_id>/manifest.json               written at the start, completed at the end;
+                                                    includes each task's definition as run
     eval_runs/<run_id>/<task>/t<n>/transcript.jsonl one trace event per line (index, t, type, ...)
     eval_runs/<run_id>/<task>/t<n>/trial.json       status, session id, timings, counts, user summary
     eval_runs/<run_id>/<task>/t<n>/observations.json results of the state-reading checks, taken
@@ -11,6 +12,7 @@ from __future__ import annotations
 
 import asyncio
 import hashlib
+import inspect
 import json
 import os
 import subprocess
@@ -96,6 +98,47 @@ def trial_counts(events: List[Dict[str, Any]]) -> Dict[str, Any]:
     }
 
 
+def _hook_doc(suite: Suite, dotted: Optional[str]) -> Optional[str]:
+    """First paragraph of a setup/teardown hook's docstring, when it has one."""
+    if not dotted:
+        return None
+    try:
+        doc = inspect.getdoc(suite.load_callable(dotted))
+    except Exception:
+        return None
+    return doc.split("\n\n")[0].strip() if doc else None
+
+
+def describe_task(task: Task, suite: Suite) -> Dict[str, Any]:
+    """
+    The task as it was run, kept in the manifest: the report shows it on the task
+    page, and it stays right when the suite file changes later.
+    """
+    user: Dict[str, Any] = {"mode": task.user.mode, "on_exhausted": task.user.on_exhausted,
+                            "max_clarifications": task.user.max_clarifications}
+    if task.user.mode == "scripted":
+        user["replies"] = list(task.user.replies)
+    else:
+        user["persona"] = task.user.persona
+        user["facts"] = list(task.user.facts)
+    return {
+        "prompt": task.prompt,
+        "setup": task.setup,
+        "setup_doc": _hook_doc(suite, task.setup),
+        "teardown": task.teardown,
+        "user": user,
+        "expected": task.reference.expected,
+        "key_facts": list(task.reference.key_facts),
+        # source: the file a context key names (None for inline text)
+        "context": {key: {"source": None if task.reference.context.get(key) == text
+                          else task.reference.context.get(key), "text": text}
+                    for key, text in task.context.items()},
+        "graders": [g.model_dump(exclude_none=True) for g in task.graders],
+        "pass_threshold": task.pass_threshold,
+        "limits": task.limits.model_dump(),
+    }
+
+
 @dataclass
 class TrialRecord:
     task: str
@@ -144,6 +187,7 @@ class Runner:
             "judge": self.config.judge_model().describe(),
             "user_sim": self.config.user_sim_model().describe() if needs_sim else None,
             "trials": {t.id: self.trials_for(t) for t in self.tasks},
+            "tasks": {t.id: describe_task(t, self.suite) for t in self.tasks},
             "concurrency": self.config.concurrency,
             "infra_retry": self.config.infra_retry,
             "metadata": self.config.metadata,
